@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { memo, useEffect, useMemo } from "react";
 import { provider } from "@/data";
 import { FeedEngine } from "@/features/feed/rules";
@@ -6,7 +7,7 @@ import { usePreferencesStore } from "@/stores/preferences.store";
 import { useTickersStore } from "@/stores/tickers.store";
 import { useWatchlistStore } from "@/stores/watchlist.store";
 import { useWorkspaceStore } from "@/stores/workspace.store";
-import { displayName, marketKey, type MarketKind, type MarketRef } from "@/types/market";
+import { categoryOf, displayName, marketKey, type MarketKind, type MarketRef } from "@/types/market";
 
 const engine = new FeedEngine(() => {
   const p = usePreferencesStore.getState();
@@ -34,6 +35,11 @@ export function MarketStreams() {
       {entries.map(([key, { market, opened }]) => (
         <MarketStream key={key} market={market.market} symbol={market.symbol} label={displayName(market)} opened={opened} />
       ))}
+      {entries
+        .filter(([, { market }]) => market.market === "perp" && categoryOf(market) === "stock")
+        .map(([key, { market }]) => (
+          <StockDays key={key} symbol={market.symbol} />
+        ))}
     </>
   );
 }
@@ -76,5 +82,22 @@ const MarketStream = memo(function MarketStream({ market, symbol, label, opened 
     };
   }, [market, symbol, label, opened]);
 
+  return null;
+});
+
+const STOCK_DAYS_REFRESH_MS = 5 * 60_000;
+
+/** 定期取美股最近的官方日线，供标签、自选和概览计算"相对收盘价"的涨跌幅 */
+const StockDays = memo(function StockDays({ symbol }: { symbol: string }) {
+  const { data } = useQuery({
+    queryKey: ["stock-days", symbol],
+    queryFn: ({ signal }) => provider.getStockRecentDays(symbol, signal),
+    staleTime: STOCK_DAYS_REFRESH_MS - 30_000,
+    refetchInterval: STOCK_DAYS_REFRESH_MS,
+    retry: 0,
+  });
+  useEffect(() => {
+    if (data) useTickersStore.getState().setStockDays(symbol, data);
+  }, [symbol, data]);
   return null;
 });

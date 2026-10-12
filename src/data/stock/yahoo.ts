@@ -68,8 +68,11 @@ export const yahooChartSchema = z.object({
   }),
 });
 
-/** 把接口返回的数据整理成图表周期对应的、只含常规交易时段的 K 线 */
-export function parseYahooChart(json: unknown, timeframe: Timeframe): Candle[] {
+/**
+ * 把接口返回的数据整理成图表周期对应的、只含常规交易时段的 K 线。
+ * adjust 为 false 时日线不做前复权，保留真实的收盘价（用作涨跌幅的基准）。
+ */
+export function parseYahooChart(json: unknown, timeframe: Timeframe, adjust = true): Candle[] {
   const result = yahooChartSchema.parse(json).chart.result?.[0];
   const times = result?.timestamp;
   if (!result || !times) return [];
@@ -102,7 +105,7 @@ export function parseYahooChart(json: unknown, timeframe: Timeframe): Candle[] {
 
     // 日线做前复权：历史价格按分红比例下调，和国内股票软件的默认口径一致。
     // 越靠近现在比例越接近 1，所以和合约的实时价格之间不会出现断层。
-    const adj = daily ? adjusted?.[i] : null;
+    const adj = daily && adjust ? adjusted?.[i] : null;
     const factor = adj != null && adj > 0 ? adj / close : 1;
 
     byTime.set(time, {
@@ -120,6 +123,18 @@ export function parseYahooChart(json: unknown, timeframe: Timeframe): Candle[] {
   return plan.groupMinutes ? aggregateSession(candles, plan.groupMinutes) : candles;
 }
 
+async function getChart(url: string, signal?: AbortSignal): Promise<unknown | null> {
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const options = { signal: signal ? AbortSignal.any([signal, timeout]) : timeout };
+  let res = await fetch(url, options);
+  if (res.status === 429) {
+    // 偶发的限流，稍等再试一次；还不行就放弃，由调用方退回合约数据
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    res = await fetch(url, options);
+  }
+  return res.ok ? res.json() : null;
+}
+
 export async function fetchStockHistory(
   symbol: string,
   timeframe: Timeframe,
@@ -127,16 +142,22 @@ export async function fetchStockHistory(
   base: string = STOCK_HISTORY_BASE,
 ): Promise<Candle[] | null> {
   if (base === "off") return null;
-  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-  const options = { signal: signal ? AbortSignal.any([signal, timeout]) : timeout };
-  const url = yahooChartUrl(symbol, timeframe, base);
-  let res = await fetch(url, options);
-  if (res.status === 429) {
-    // 偶发的限流，稍等再试一次；还不行就放弃，由调用方退回合约数据
-    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
-    res = await fetch(url, options);
-  }
-  if (!res.ok) return null;
-  const candles = parseYahooChart(await res.json(), timeframe);
+  const json = await getChart(yahooChartUrl(symbol, timeframe, base), signal);
+  if (json === null) return null;
+  const candles = parseYahooChart(json, timeframe);
   return candles.length >= 2 ? candles : null;
+}
+
+/** 最近十来个交易日的真实日线（不复权），用来算"相对收盘价"的涨跌幅 */
+export async function fetchStockRecentDays(
+  symbol: string,
+  signal?: AbortSignal,
+  base: string = STOCK_HISTORY_BASE,
+): Promise<Candle[] | null> {
+  if (base === "off") return null;
+  const params = new URLSearchParams({ interval: "1d", range: "1mo", includePrePost: "false" });
+  const json = await getChart(`${base}/v8/finance/chart/${encodeURIComponent(stockTicker(symbol))}?${params}`, signal);
+  if (json === null) return null;
+  const candles = parseYahooChart(json, "1d", false);
+  return candles.length >= 1 ? candles : null;
 }

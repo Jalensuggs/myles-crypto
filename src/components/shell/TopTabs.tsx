@@ -1,7 +1,9 @@
 import { Plus, TrendingUp, X } from "lucide-react";
 import { memo } from "react";
 import { CoinIcon } from "@/components/common/CoinIcon";
+import { PHASE_LABELS } from "@/features/session/stock-quote";
 import { formatPct, formatPrice, guessPrecision } from "@/lib/format";
+import { useStockQuote } from "@/lib/use-stock-quote";
 import { useTickersStore } from "@/stores/tickers.store";
 import { useUiStore } from "@/stores/ui.store";
 import { MAX_TABS } from "@/stores/workspace.logic";
@@ -62,7 +64,11 @@ const TabItem = memo(function TabItem({ tab, active, shown, closable }: TabItemP
   const precision = useTickersStore((s) => s.precision[key]);
   const name = displayName(tab.market);
   const digits = precision ?? (ticker ? guessPrecision(ticker.last) : 2);
-  const tone = !ticker ? "muted" : ticker.changePct >= 0 ? "up" : "down";
+  // 美股显示相对收盘价的涨跌幅，并标出盘前、盘后或休市；其他标的显示 24 小时涨跌幅
+  const quote = useStockQuote(tab.market);
+  const changePct = quote ? quote.changePct : ticker?.changePct;
+  const phase = quote ? PHASE_LABELS[quote.phase] : "";
+  const tone = changePct === undefined ? "muted" : changePct >= 0 ? "up" : "down";
 
   return (
     <div className="tab" data-testid="tab" data-symbol={name} data-active={active} data-shown={shown}>
@@ -76,7 +82,12 @@ const TabItem = memo(function TabItem({ tab, active, shown, closable }: TabItemP
         <CoinIcon symbol={tab.market.symbol} />
         <span className="tab__name">{name}</span>
         <span className="tab__price">{formatPrice(ticker?.last, digits)}</span>
-        <span className={`tab__pct ${tone}`}>{formatPct(ticker?.changePct)}</span>
+        <span className={`tab__pct ${tone}`}>{formatPct(changePct)}</span>
+        {phase && (
+          <span className="phase" data-testid="tab-phase">
+            {phase}
+          </span>
+        )}
       </button>
       {closable && (
         <button

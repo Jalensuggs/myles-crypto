@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { CoinIcon } from "@/components/common/CoinIcon";
 import { provider } from "@/data";
+import { PHASE_LABELS } from "@/features/session/stock-quote";
 import { formatCompact, formatCountdown, formatPct, formatPrice, formatUsd, guessPrecision } from "@/lib/format";
+import { useStockQuote } from "@/lib/use-stock-quote";
 import { useNow } from "@/lib/use-now";
 import { useTickersStore } from "@/stores/tickers.store";
 import { selectActiveTab, useWorkspaceStore } from "@/stores/workspace.store";
@@ -41,7 +43,11 @@ export function MarketOverview() {
   });
 
   const precision = storedPrecision ?? (ticker ? guessPrecision(ticker.last) : 2);
-  const tone = !ticker ? "muted" : ticker.changePct >= 0 ? "up" : "down";
+  const quote = useStockQuote(market);
+  const changePct = quote ? quote.changePct : ticker?.changePct;
+  const tone = changePct === undefined ? "muted" : changePct >= 0 ? "up" : "down";
+  const phase = quote ? PHASE_LABELS[quote.phase] : "";
+  const refDate = quote ? new Date(quote.refTime * 1000) : null;
   const rate = derivatives?.fundingRate;
   const oiValue =
     openInterest.data !== undefined && (derivatives?.markPrice ?? ticker?.last) !== undefined
@@ -57,8 +63,28 @@ export function MarketOverview() {
         <span className={`overview__price ${tone}`}>{formatPrice(ticker?.last, precision)}</span>
       </div>
       <dl className="overview__rows">
-        <dt>24h 涨跌</dt>
-        <dd className={tone}>{formatPct(ticker?.changePct)}</dd>
+        {quote && refDate ? (
+          <>
+            <dt>{phase ? `${phase}涨跌` : "今日涨跌"}</dt>
+            <dd className={tone} data-testid="overview-change">
+              {formatPct(quote.changePct)}
+            </dd>
+            <dt>
+              {quote.phase === "open" ? "昨收" : "收盘价"}（{refDate.getUTCMonth() + 1}/{refDate.getUTCDate()}）
+            </dt>
+            <dd data-testid="overview-ref-close">
+              {formatPrice(quote.refClose, precision)}
+              {quote.refDayChangePct !== undefined && quote.phase !== "open" && (
+                <span className={quote.refDayChangePct >= 0 ? "up" : "down"}> {formatPct(quote.refDayChangePct)}</span>
+              )}
+            </dd>
+          </>
+        ) : (
+          <>
+            <dt>24h 涨跌</dt>
+            <dd className={tone}>{formatPct(ticker?.changePct)}</dd>
+          </>
+        )}
         <dt>24h 最高 / 最低</dt>
         <dd>
           {formatPrice(ticker?.high24h, precision)} / {formatPrice(ticker?.low24h, precision)}
@@ -103,7 +129,11 @@ export function MarketOverview() {
         </dd>
       </dl>
       {isPerp && categoryOf(market) !== "crypto" && (
-        <p className="overview__note">这是跟踪其价格的永续合约，24 小时交易，和交易所官方报价会有小幅偏差。</p>
+        <p className="overview__note">
+          {categoryOf(market) === "stock"
+            ? "实时价格来自 24 小时交易的合约，和交易所官方报价会有小幅偏差；涨跌幅以最近一次官方收盘价为基准，历史 K 线用官方股价。"
+            : "这是跟踪其价格的永续合约，24 小时交易，和交易所官方报价会有小幅偏差。"}
+        </p>
       )}
     </section>
   );

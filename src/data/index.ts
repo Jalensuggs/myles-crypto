@@ -47,12 +47,16 @@ export function fetchCandlePage(
  * 美股的官方历史 K 线。取不到（接口失效、被限流、没有这只股票）时返回 null，不抛错：
  * 这项数据是锦上添花，没有它图表照样能用合约数据画出来。
  */
-export function fetchOfficialHistory(symbol: string, timeframe: Timeframe): Promise<Candle[] | null> {
+export function fetchOfficialHistory(
+  symbol: string,
+  timeframe: Timeframe,
+  options: { fresh?: boolean } = {},
+): Promise<Candle[] | null> {
   return queryClient
     .fetchQuery({
       queryKey: ["stock-history", symbol, timeframe],
       queryFn: ({ signal }) => provider.getStockHistory(symbol, timeframe, signal),
-      staleTime: 5 * 60_000,
+      staleTime: options.fresh ? 0 : 5 * 60_000,
       retry: 0,
     })
     .catch(() => null);

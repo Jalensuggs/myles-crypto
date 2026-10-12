@@ -1,6 +1,6 @@
 import type { CandleQuery, FearGreed, MarketDataProvider, Unsubscribe } from "@/data/provider";
 import { StreamConnection } from "@/data/realtime/stream-connection";
-import { fetchStockHistory } from "@/data/stock/yahoo";
+import { fetchStockHistory, fetchStockRecentDays } from "@/data/stock/yahoo";
 import { useConnectionStore } from "@/stores/connection.store";
 import type {
   AssetCategory,
@@ -137,6 +137,10 @@ export class BinanceProvider implements MarketDataProvider {
 
   getStockHistory(symbol: string, timeframe: Timeframe, signal?: AbortSignal): Promise<Candle[] | null> {
     return fetchStockHistory(symbol, timeframe, signal);
+  }
+
+  getStockRecentDays(symbol: string, signal?: AbortSignal): Promise<Candle[] | null> {
+    return fetchStockRecentDays(symbol, signal);
   }
 
   async getFearGreed(signal?: AbortSignal): Promise<FearGreed> {

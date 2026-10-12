@@ -186,6 +186,11 @@ export class MockProvider implements MarketDataProvider {
     return candles.length >= 2 ? candles : null;
   }
 
+  async getStockRecentDays(symbol: string): Promise<Candle[] | null> {
+    const days = await this.getStockHistory(symbol, "1d");
+    return days ? days.slice(-15) : null;
+  }
+
   subscribeCandles(
     market: MarketRef,
     timeframe: Timeframe,

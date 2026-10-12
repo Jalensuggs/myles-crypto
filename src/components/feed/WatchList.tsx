@@ -1,7 +1,9 @@
 import { Plus, X } from "lucide-react";
 import { memo } from "react";
 import { CoinIcon } from "@/components/common/CoinIcon";
+import { PHASE_LABELS } from "@/features/session/stock-quote";
 import { formatPct, formatPrice, guessPrecision } from "@/lib/format";
+import { useStockQuote } from "@/lib/use-stock-quote";
 import { useTickersStore } from "@/stores/tickers.store";
 import { useUiStore } from "@/stores/ui.store";
 import { useWatchlistStore } from "@/stores/watchlist.store";
@@ -51,7 +53,10 @@ const WatchRow = memo(function WatchRow({ market, active }: { market: MarketRef;
   const precision = useTickersStore((s) => s.precision[key]);
   const name = displayName(market);
   const digits = precision ?? (ticker ? guessPrecision(ticker.last) : 2);
-  const tone = !ticker ? "muted" : ticker.changePct >= 0 ? "up" : "down";
+  const quote = useStockQuote(market);
+  const changePct = quote ? quote.changePct : ticker?.changePct;
+  const phase = quote ? PHASE_LABELS[quote.phase] : "";
+  const tone = changePct === undefined ? "muted" : changePct >= 0 ? "up" : "down";
 
   return (
     <li className="watch__row" data-testid="watch-row" data-symbol={name} data-active={active}>
@@ -63,7 +68,9 @@ const WatchRow = memo(function WatchRow({ market, active }: { market: MarketRef;
           {!name.endsWith(".P") && <span className="tbtn__tag">{marketTypeLabel(market)}</span>}
         </span>
         <span>{formatPrice(ticker?.last, digits)}</span>
-        <span className={`watch__pct ${tone}`}>{formatPct(ticker?.changePct)}</span>
+        <span className={`watch__pct ${tone}`} title={phase ? `${phase}，相对最近一次收盘价` : undefined}>
+          {formatPct(changePct)}
+        </span>
       </button>
       <button
         type="button"

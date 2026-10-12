@@ -152,6 +152,14 @@ input {
 .tab__pct {
   font-size: 12px;
 }
+.phase {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--bg-active);
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 15px;
+}
 .tab__close {
   display: grid;
   place-items: center;

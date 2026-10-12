@@ -42,6 +42,8 @@ export interface MarketDataProvider {
    * 没有这项数据或取不到时返回 null，调用方退回合约数据。
    */
   getStockHistory(symbol: string, timeframe: Timeframe, signal?: AbortSignal): Promise<Candle[] | null>;
+  /** 美股最近若干个交易日的真实日线（不复权），用来算相对收盘价的涨跌幅；取不到时返回 null */
+  getStockRecentDays(symbol: string, signal?: AbortSignal): Promise<Candle[] | null>;
 
   subscribeCandles(
     market: MarketRef,

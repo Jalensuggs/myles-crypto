@@ -85,6 +85,10 @@ const MAX_INITIAL_PAGES = 8;
 /** 合成的周期（1 时、4 时、1 日）需要更多原始 K 线，允许多翻几页 */
 const MAX_INITIAL_PAGES_GROUPED = 12;
 const SESSION_SECONDS = 6.5 * 3600;
+/** 一根 K 线走完后等这么久再去取官方数据，给对方留出发布的时间 */
+const OFFICIAL_REFRESH_DELAY_MS = 20_000;
+/** 两次补取之间至少间隔这么久 */
+const OFFICIAL_REFRESH_MIN_GAP_MS = 60_000;
 const MIN_MORE_BARS = 100;
 const MAX_MORE_PAGES = 5;
 
@@ -140,6 +144,8 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
   const [switching, setSwitching] = useState(false);
   /** 当前图表的历史部分是否来自官方股价数据 */
   const [officialOn, setOfficialOn] = useState(false);
+  /** 打开图表之后又补取了几次官方数据（开盘期间每走完一根 K 线补一次） */
+  const [officialRefreshes, setOfficialRefreshes] = useState(0);
   const [atLatest, setAtLatest] = useState(true);
   const [reloadNonce, setReloadNonce] = useState(0);
 
@@ -338,6 +344,7 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
     L.title = `${displayName(market)} · ${TIMEFRAME_LABELS[timeframe]}`;
 
     setPhase("loading");
+    setOfficialRefreshes(0);
     setError(null);
     setSwitching(!sameAsShown && candlesRef.current.length > 0);
 
@@ -370,8 +377,33 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
     };
 
     // 实时 K 线先并入数组，再按帧批量写进图表
-    const onLive = (incoming: Candle) => {
+    // 开盘期间每走完一根 K 线，就把刚走完的那根换成官方数据，
+    // 这样不管页面开多久，只有正在走的那一根来自合约。一开始没取到官方数据时也借这个机会重试。
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastRefreshAt = 0;
+    const refreshOfficial = async () => {
+      refreshTimer = null;
+      lastRefreshAt = Date.now();
+      const fresh = await fetchOfficialHistory(market.symbol, timeframe, { fresh: true });
+      if (!alive() || !fresh || !matchesContract(fresh, toTargets(source))) return;
+      official = fresh;
+      queue.length = 0;
+      rebuild();
+      renderAll();
+      if (!L.hovering) showLast();
+      setOfficialOn(true);
+      setOfficialRefreshes((n) => n + 1);
+    };
+    const scheduleOfficialRefresh = () => {
+      if (!sessionOnly || refreshTimer) return;
+      const sinceLast = Date.now() - lastRefreshAt;
+      const wait = Math.max(OFFICIAL_REFRESH_DELAY_MS, OFFICIAL_REFRESH_MIN_GAP_MS - sinceLast);
+      refreshTimer = setTimeout(() => void refreshOfficial(), wait);
+    };
+
+    const onLive = (incoming: Candle, closed: boolean) => {
       if (!alive() || (keep && !keep(incoming))) return;
+      if (closed) scheduleOfficialRefresh();
       if (mergeCandle(source, incoming) === "ignored") return;
       let candle = incoming;
       if (group) {
@@ -506,6 +538,7 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
       L.token += 1;
       for (const off of offs) off();
       if (raf) cancelAnimationFrame(raf);
+      if (refreshTimer) clearTimeout(refreshTimer);
       loadMoreRef.current = () => {};
     };
     // market 的内容由 key 唯一确定
@@ -524,6 +557,7 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
       data-phase={phase}
       data-session={sessionOnly ? "regular" : "all"}
       data-history={sessionOnly && officialOn ? "official" : "contract"}
+      data-official-refreshes={officialRefreshes}
       data-focused={focused}
       data-multi={multi}
       data-switching={switching}

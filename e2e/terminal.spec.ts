@@ -680,6 +680,93 @@ test.describe("美股交易时段", () => {
   });
 });
 
+test.describe("美股的涨跌口径与实时更新", () => {
+  // 把页面里的时间拨到指定时刻（夏令时：开盘 13:30 UTC，收盘 20:00 UTC）
+  async function openAt(page: Page, iso: string) {
+    await page.clock.install({ time: new Date(iso) });
+    await open(page);
+  }
+
+  const aapl = (page: Page) => page.locator('[data-testid="tab"][data-symbol="AAPL"]');
+
+  test("盘前：美股标出盘前，涨跌幅以最近一次收盘价为基准", async ({ page }) => {
+    await openAt(page, "2026-10-12T10:18:00Z");
+    await expect(aapl(page).getByTestId("tab-phase")).toHaveText("盘前");
+    // 加密货币不受影响
+    await expect(page.locator('[data-testid="tab"][data-symbol="BTCUSDT"]').getByTestId("tab-phase")).toHaveCount(0);
+
+    if (!isWide(page)) return;
+    await page.getByRole("button", { name: "切换到 AAPL", exact: true }).click();
+    const overview = page.getByTestId("market-overview");
+    await expect(overview).toContainText("盘前涨跌");
+    await expect(overview).toContainText("收盘价（10/9）");
+    await expect(overview).not.toContainText("24h 涨跌");
+
+    // 概览里的涨跌幅 = (现价 − 收盘价) / 收盘价
+    const num = (text: string | null) => Number((text ?? "").replace(/[,+%]/g, "").replace("−", "-").trim().split(" ")[0]);
+    const refClose = num(await page.getByTestId("overview-ref-close").textContent());
+    const price = num(await overview.locator(".overview__price").textContent());
+    const shown = num(await page.getByTestId("overview-change").textContent());
+    expect(refClose).toBeGreaterThan(0);
+    expect(shown).toBeCloseTo(((price - refClose) / refClose) * 100, 1);
+  });
+
+  test("盘中不标时段，盘后和周末分别标出", async ({ page }) => {
+    await openAt(page, "2026-10-08T15:00:00Z");
+    await expect(aapl(page).locator(".tab__pct")).not.toHaveText("--");
+    await expect(aapl(page).getByTestId("tab-phase")).toHaveCount(0);
+    if (isWide(page)) {
+      await page.getByRole("button", { name: "切换到 AAPL", exact: true }).click();
+      await expect(page.getByTestId("market-overview")).toContainText("今日涨跌");
+      await expect(page.getByTestId("market-overview")).toContainText("昨收（10/7）");
+      await expect(page.getByTestId("session-note")).toHaveAttribute("data-open", "true");
+    }
+
+    await page.clock.setSystemTime(new Date("2026-10-08T21:00:00Z"));
+    await page.reload();
+    await expect(aapl(page).getByTestId("tab-phase")).toHaveText("盘后");
+
+    await page.clock.setSystemTime(new Date("2026-10-10T15:00:00Z"));
+    await page.reload();
+    await expect(aapl(page).getByTestId("tab-phase")).toHaveText("休市");
+  });
+
+  test("开盘期间每走完一根 K 线，自动补取一次官方数据", async ({ page }) => {
+    // 15:00:45，再过 15 秒这根 1 分钟线就走完
+    await openAt(page, "2026-10-08T15:00:45Z");
+    await page.getByRole("button", { name: "切换到 AAPL", exact: true }).click();
+    await page.getByTestId("tf-1m").click();
+    const pane = page.getByTestId("pane-0");
+    await expect(pane).toHaveAttribute("data-timeframe", "1m");
+    await expect(pane).toHaveAttribute("data-phase", "ready");
+    await expect(pane).toHaveAttribute("data-history", "official");
+    await expect(pane).toHaveAttribute("data-official-refreshes", "0");
+
+    // 走过整分钟，再过完等待时间
+    await page.clock.fastForward(20_000);
+    await page.clock.fastForward(65_000);
+    await expect(pane).toHaveAttribute("data-official-refreshes", "1");
+    await expect(pane).toHaveAttribute("data-phase", "ready");
+    await expect(page.getByTestId("legend-ma-7")).toHaveText(/^MA7 [\d,.]+$/);
+
+    // 换标的后计数重新开始
+    await page.getByRole("button", { name: "切换到 NVDA", exact: true }).click();
+    await expect(pane).toHaveAttribute("data-symbol", "NVDA");
+    await expect(pane).toHaveAttribute("data-official-refreshes", "0");
+  });
+
+  test("休市期间不会去补取官方数据", async ({ page }) => {
+    await openAt(page, "2026-10-10T15:00:45Z");
+    await page.getByRole("button", { name: "切换到 AAPL", exact: true }).click();
+    await page.getByTestId("tf-1m").click();
+    const pane = page.getByTestId("pane-0");
+    await expect(pane).toHaveAttribute("data-phase", "ready");
+    await page.clock.fastForward(20_000);
+    await page.clock.fastForward(65_000);
+    await expect(pane).toHaveAttribute("data-official-refreshes", "0");
+  });
+});
+
 test.describe("自选", () => {
   test("默认有自选，点击一行在图表里打开", async ({ page }) => {
     test.skip(!isWide(page), "只在宽屏下适用");
