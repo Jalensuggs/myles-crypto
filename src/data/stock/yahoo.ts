@@ -36,6 +36,9 @@ const PLANS: Record<Timeframe, YahooPlan> = {
   "1h": { interval: "60m", range: "730d", stepSeconds: 3600, groupMinutes: null },
   "4h": { interval: "60m", range: "730d", stepSeconds: 3600, groupMinutes: 240 },
   "1d": { interval: "1d", range: "10y", stepSeconds: 86400, groupMinutes: null },
+  // 周线和月线由日线归并而来，取数时和日线相同
+  "1w": { interval: "1d", range: "10y", stepSeconds: 86400, groupMinutes: null },
+  "1M": { interval: "1d", range: "10y", stepSeconds: 86400, groupMinutes: null },
 };
 
 /** 合约名对应的股票代码，例如 AAPLUSDT → AAPL */

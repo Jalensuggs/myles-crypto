@@ -1,6 +1,6 @@
 export type MarketKind = "perp" | "spot";
 
-export const TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"] as const;
+export const TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1M"] as const;
 export type Timeframe = (typeof TIMEFRAMES)[number];
 
 export const TIMEFRAME_SECONDS: Record<Timeframe, number> = {
@@ -11,6 +11,9 @@ export const TIMEFRAME_SECONDS: Record<Timeframe, number> = {
   "1h": 3600,
   "4h": 14400,
   "1d": 86400,
+  "1w": 604800,
+  // 月线每根的长度不固定，这里取 30 天，只用于估算（比如把画线延伸到未来）
+  "1M": 2592000,
 };
 
 export const TIMEFRAME_LABELS: Record<Timeframe, string> = {
@@ -21,6 +24,8 @@ export const TIMEFRAME_LABELS: Record<Timeframe, string> = {
   "1h": "1时",
   "4h": "4时",
   "1d": "1日",
+  "1w": "1周",
+  "1M": "1月",
 };
 
 export const CHART_TYPES = ["candles", "bars", "line", "area"] as const;

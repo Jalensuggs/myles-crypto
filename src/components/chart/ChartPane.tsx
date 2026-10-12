@@ -18,7 +18,13 @@ import { describeError } from "@/data/binance/provider";
 import { loadLatest, loadOlder, type LoaderOptions, type PageFetcher } from "@/data/candle-loader";
 import { mergeCandle, mergeCandleLists } from "@/data/candles";
 import type { IndicatorConfig } from "@/features/indicators/config";
-import { aggregateLast, aggregateSession, sessionPlan } from "@/features/session/aggregate";
+import {
+  aggregateLast,
+  aggregateSession,
+  regroupCalendar,
+  regroupCalendarLast,
+  sessionPlan,
+} from "@/features/session/aggregate";
 import { matchesContract, mergeOfficial } from "@/features/session/official";
 import { isUsRegularSession } from "@/features/session/us-session";
 import { useDrawingsStore } from "@/stores/drawings.store";
@@ -34,6 +40,7 @@ import {
   type Candle,
   type ChartType,
   type MarketTab,
+  type Timeframe,
 } from "@/types/market";
 import { screenshotRegistry, type ChartBridge, type OverlayPainter } from "./bridge";
 import {
@@ -319,6 +326,9 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
     const sourceStep = TIMEFRAME_SECONDS[sourceTimeframe];
     const group = plan?.groupMinutes ?? null;
     const perGroup = plan?.barsPerGroup ?? 1;
+    // 周线和月线：先得到日线（合约合成 + 官方历史），再按自然周、自然月归并
+    const calendar = plan?.calendar ?? null;
+    const officialTimeframe: Timeframe = calendar ? "1d" : timeframe;
     const keep = sessionOnly ? (c: Candle) => isUsRegularSession(c.time, sourceStep) : undefined;
     const fetchPage: PageFetcher = (endTime) => fetchCandlePage(market, sourceTimeframe, endTime);
     const loader: LoaderOptions = {
@@ -333,11 +343,14 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
     let official: Candle[] | null = null;
     const toTargets = (list: Candle[]) => (group ? aggregateSession(list, group) : list);
     // 一根 K 线最长也就一个交易时段（6.5 小时）。过了这个时间就算走完，官方数据不会再变。
-    const barSpan = Math.min(step, SESSION_SECONDS);
+    const barSpan = Math.min(TIMEFRAME_SECONDS[officialTimeframe], SESSION_SECONDS);
     const isComplete = (c: Candle) => c.time + barSpan <= Date.now() / 1000;
+    // base 是拼好官方历史、但还没有按周或月归并的序列
+    let base: Candle[] = [];
     const rebuild = () => {
       const contract = toTargets(source);
-      candlesRef.current = official ? mergeOfficial(contract, official, isComplete) : contract;
+      base = official ? mergeOfficial(contract, official, isComplete) : contract;
+      candlesRef.current = calendar ? regroupCalendar(base, calendar) : base;
     };
     L.hasMore = true;
     L.loadingMore = false;
@@ -384,7 +397,7 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
     const refreshOfficial = async () => {
       refreshTimer = null;
       lastRefreshAt = Date.now();
-      const fresh = await fetchOfficialHistory(market.symbol, timeframe, { fresh: true });
+      const fresh = await fetchOfficialHistory(market.symbol, officialTimeframe, { fresh: true });
       if (!alive() || !fresh || !matchesContract(fresh, toTargets(source))) return;
       official = fresh;
       queue.length = 0;
@@ -411,8 +424,13 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
         if (!merged) return;
         candle = merged;
       }
-      // 没有合成也没有官方历史时，candlesRef 和 source 是同一个数组，上面已经更新过了
-      if (candlesRef.current !== source && mergeCandle(candlesRef.current, candle) === "ignored") return;
+      // 没有合成也没有官方历史时，base 和 source 是同一个数组，上面已经更新过了
+      if (base !== source && mergeCandle(base, candle) === "ignored") return;
+      if (calendar) {
+        const merged = regroupCalendarLast(base, calendar);
+        if (!merged || mergeCandle(candlesRef.current, merged) === "ignored") return;
+        candle = merged;
+      }
       const tail = queue[queue.length - 1];
       if (tail && tail.time === candle.time) queue[queue.length - 1] = candle;
       else queue.push(candle);
@@ -476,7 +494,7 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
       try {
         // 官方历史和合约的最新一页同时取，互不等待
         const [history, firstPage] = await Promise.all([
-          sessionOnly ? fetchOfficialHistory(market.symbol, timeframe) : null,
+          sessionOnly ? fetchOfficialHistory(market.symbol, officialTimeframe) : null,
           loadLatest(fetchPage, { ...loader, minBars: 0, maxPages: 1 }),
         ]);
         if (!alive()) return;

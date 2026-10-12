@@ -186,6 +186,46 @@ test.describe("图表", () => {
   });
 });
 
+test.describe("周线和月线", () => {
+  test("加密货币可以切到周线和月线", async ({ page }) => {
+    await open(page);
+    const pane = page.getByTestId("pane-0");
+    for (const [tf, label] of [
+      ["1w", "1周"],
+      ["1M", "1月"],
+    ] as const) {
+      await page.getByTestId(`tf-${tf}`).click();
+      await expect(pane).toHaveAttribute("data-timeframe", tf);
+      await expect(pane).toHaveAttribute("data-phase", "ready");
+      await expect(page.getByTestId("legend")).toContainText(label);
+      await expect(page.getByTestId("legend-ma-99")).toHaveText(/^MA99 [\d,.]+$/);
+    }
+    // 1 分和 1 月的按钮只差大小写，不能串
+    await page.getByTestId("tf-1m").click();
+    await expect(pane).toHaveAttribute("data-timeframe", "1m");
+    await expect(page.getByTestId("legend")).toContainText("1分");
+  });
+
+  test("美股的周线和月线由日线归并，同样带官方历史", async ({ page }) => {
+    await open(page);
+    await page.getByRole("button", { name: "切换到 AAPL", exact: true }).click();
+    const pane = page.getByTestId("pane-0");
+    await page.getByTestId("tf-1w").click();
+    await expect(pane).toHaveAttribute("data-timeframe", "1w");
+    await expect(pane).toHaveAttribute("data-phase", "ready");
+    await expect(pane).toHaveAttribute("data-history", "official");
+    await expect(page.getByTestId("legend-ma-25")).toHaveText(/^MA25 [\d,.]+$/);
+
+    await page.getByTestId("tf-1M").click();
+    await expect(pane).toHaveAttribute("data-timeframe", "1M");
+    await expect(pane).toHaveAttribute("data-phase", "ready");
+    await expect(page.getByTestId("legend-ma-7")).toHaveText(/^MA7 [\d,.]+$/);
+
+    await page.reload();
+    await expect(page.getByTestId("pane-0")).toHaveAttribute("data-timeframe", "1M");
+  });
+});
+
 test.describe("绘图", () => {
   test("画一条水平线，刷新后仍在", async ({ page }) => {
     await open(page);

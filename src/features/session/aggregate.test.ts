@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Candle } from "@/types/market";
-import { aggregateLast, aggregateSession, sessionPlan } from "./aggregate";
+import { aggregateLast, aggregateSession, regroupCalendar, regroupCalendarLast, sessionPlan } from "./aggregate";
 import { isUsRegularSession } from "./us-session";
 
 const at = (iso: string) => Date.parse(iso) / 1000;
@@ -28,14 +28,20 @@ const fri = session(day30m("2026-10-09", 200));
 describe("sessionPlan", () => {
   it("1 分到 30 分直接用原始 K 线", () => {
     for (const tf of ["1m", "5m", "15m", "30m"] as const) {
-      expect(sessionPlan(tf)).toEqual({ source: tf, groupMinutes: null, barsPerGroup: 1 });
+      expect(sessionPlan(tf)).toEqual({ source: tf, groupMinutes: null, barsPerGroup: 1, calendar: null });
     }
   });
 
   it("1 时、4 时、1 日用 30 分钟线合成", () => {
     expect(sessionPlan("1h")).toMatchObject({ source: "30m", groupMinutes: 60 });
     expect(sessionPlan("4h")).toMatchObject({ source: "30m", groupMinutes: 240 });
-    expect(sessionPlan("1d")).toMatchObject({ source: "30m", barsPerGroup: 13 });
+    expect(sessionPlan("1d")).toMatchObject({ source: "30m", barsPerGroup: 13, calendar: null });
+  });
+
+  it("周线和月线先合成日线，再按自然周、自然月归并", () => {
+    expect(sessionPlan("1w")).toMatchObject({ source: "30m", barsPerGroup: 13, calendar: "week" });
+    expect(sessionPlan("1M")).toMatchObject({ source: "30m", barsPerGroup: 13, calendar: "month" });
+    expect(sessionPlan("1w").groupMinutes).toBe(sessionPlan("1d").groupMinutes);
   });
 });
 
@@ -131,5 +137,73 @@ describe("aggregateLast", () => {
   it("最后一组残缺时返回 null", () => {
     expect(aggregateLast(thu.slice(5, 8), 1440)).toBeNull();
     expect(aggregateLast([], 60)).toBeNull();
+  });
+});
+
+describe("regroupCalendar", () => {
+  const daily = (date: string, open: number, high: number, low: number, close: number): Candle => ({
+    time: at(`${date}T13:30:00Z`),
+    open,
+    high,
+    low,
+    close,
+    volume: 100,
+  });
+
+  // 2026-09-28 周一 … 10-02 周五；10-05 周一 … 10-09 周五；10-12 周一
+  const days = [
+    daily("2026-09-28", 100, 105, 99, 104),
+    daily("2026-09-29", 104, 108, 103, 107),
+    daily("2026-09-30", 107, 109, 101, 102),
+    daily("2026-10-01", 102, 106, 100, 105),
+    daily("2026-10-02", 105, 112, 104, 111),
+    daily("2026-10-05", 111, 113, 110, 112),
+    daily("2026-10-06", 112, 115, 111, 114),
+    daily("2026-10-07", 114, 116, 108, 109),
+    daily("2026-10-08", 109, 110, 105, 106),
+    daily("2026-10-09", 106, 107, 98, 99),
+    daily("2026-10-12", 99, 101, 97, 100),
+  ];
+
+  it("周线：周一到周五归为一根，开盘取周一、收盘取周五", () => {
+    const weeks = regroupCalendar(days, "week");
+    expect(weeks).toHaveLength(3);
+    expect(weeks[0]).toEqual({ time: at("2026-09-28T13:30:00Z"), open: 100, high: 112, low: 99, close: 111, volume: 500 });
+    expect(weeks[1]).toMatchObject({ time: at("2026-10-05T13:30:00Z"), open: 111, high: 116, low: 98, close: 99 });
+    // 本周只走了一天
+    expect(weeks[2]).toMatchObject({ time: at("2026-10-12T13:30:00Z"), open: 99, close: 100, volume: 100 });
+  });
+
+  it("月线：按自然月归并，一周跨月时拆开", () => {
+    const months = regroupCalendar(days, "month");
+    expect(months).toHaveLength(2);
+    expect(months[0]).toMatchObject({ time: at("2026-09-28T13:30:00Z"), open: 100, high: 109, low: 99, close: 102, volume: 300 });
+    expect(months[1]).toMatchObject({ time: at("2026-10-01T13:30:00Z"), open: 102, high: 116, low: 97, close: 100, volume: 800 });
+  });
+
+  it("周一是休市日时，那一周从周二开始", () => {
+    // 2026-09-07 劳动节
+    const weeks = regroupCalendar([daily("2026-09-04", 1, 2, 1, 2), daily("2026-09-08", 2, 3, 2, 3), daily("2026-09-09", 3, 4, 3, 4)], "week");
+    expect(weeks.map((w) => w.time)).toEqual([at("2026-09-04T13:30:00Z"), at("2026-09-08T13:30:00Z")]);
+  });
+
+  it("跨年时月份不会混在一起", () => {
+    const months = regroupCalendar(
+      [daily("2025-12-31", 1, 2, 1, 2), daily("2026-01-02", 2, 3, 2, 3), daily("2027-01-04", 3, 4, 3, 4)],
+      "month",
+    );
+    expect(months).toHaveLength(3);
+  });
+
+  it("regroupCalendarLast 和完整归并的最后一根一致", () => {
+    for (const unit of ["week", "month"] as const) {
+      for (let n = 1; n <= days.length; n++) {
+        const part = days.slice(0, n);
+        const all = regroupCalendar(part, unit);
+        expect(regroupCalendarLast(part, unit)).toEqual(all[all.length - 1]);
+      }
+    }
+    expect(regroupCalendarLast([], "week")).toBeNull();
+    expect(regroupCalendar([], "month")).toEqual([]);
   });
 });
