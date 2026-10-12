@@ -7,6 +7,7 @@ import {
   spot,
   type MarketRef,
   type MarketTab,
+  type Timeframe,
 } from "@/types/market";
 import { z } from "zod";
 
@@ -56,8 +57,11 @@ export const DEFAULT_MARKETS: MarketRef[] = [
   perp("TSLAUSDT", "stock"),
 ];
 
+/** 新开的标签默认看日线 */
+export const DEFAULT_TIMEFRAME: Timeframe = "1d";
+
 export function makeTab(market: MarketRef, id: string): MarketTab {
-  return { id, market, timeframe: "15m", chartType: "candles" };
+  return { id, market, timeframe: DEFAULT_TIMEFRAME, chartType: "candles" };
 }
 
 export function defaultWorkspace(): WorkspaceData {

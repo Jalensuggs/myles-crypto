@@ -45,6 +45,9 @@ test.describe("首屏", () => {
     await expect(page.getByTestId("mock-badge")).toHaveText("模拟数据");
     await expect(page.getByTestId("tab")).toHaveCount(6);
     await expect(page.getByTestId("pane-0")).toHaveAttribute("data-symbol", "BTCUSDT");
+    // 默认打开的是日线图
+    await expect(page.getByTestId("pane-0")).toHaveAttribute("data-timeframe", "1d");
+    await expect(page.getByTestId("tf-1d")).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("legend")).toContainText("现货");
     await expect(page.getByTestId("legend")).toContainText("收");
     await expect(page.getByTestId("tab").nth(3)).toHaveAttribute("data-symbol", "AAPL");
@@ -182,7 +185,7 @@ test.describe("图表", () => {
     const downloadPromise = page.waitForEvent("download");
     await page.getByRole("button", { name: "截图" }).click();
     const download = await downloadPromise;
-    expect(download.suggestedFilename()).toMatch(/^myles-crypto-BTCUSDT-15m-\d{8}-\d{6}\.png$/);
+    expect(download.suggestedFilename()).toMatch(/^myles-crypto-BTCUSDT-1d-\d{8}-\d{6}\.png$/);
   });
 });
 

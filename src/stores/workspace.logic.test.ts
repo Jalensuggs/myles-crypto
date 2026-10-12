@@ -33,6 +33,14 @@ describe("默认工作区", () => {
   });
 });
 
+describe("默认周期", () => {
+  it("默认标签和新添加的标签都是日线", () => {
+    const ws = defaultWorkspace();
+    expect(ws.tabs.every((t) => t.timeframe === "1d")).toBe(true);
+    expect(mustAdd(ws, "AVAXUSDT", "t7").tabs[6]!.timeframe).toBe("1d");
+  });
+});
+
 describe("addTab", () => {
   it("新增后自动切到新标签", () => {
     const ws = mustAdd(defaultWorkspace(), "AVAXUSDT", "t7");
@@ -166,7 +174,7 @@ describe("updateTab", () => {
     const ws = defaultWorkspace();
     const next = updateTab(ws, ws.tabs[0]!.id, { timeframe: "1h" });
     expect(next.tabs[0]!.timeframe).toBe("1h");
-    expect(next.tabs[1]!.timeframe).toBe("15m");
+    expect(next.tabs[1]!.timeframe).toBe("1d");
   });
 
   it("把标签换成已经打开的标的时切过去而不是产生重复", () => {
