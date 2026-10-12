@@ -1,0 +1,32 @@
+:root {
+  --bg-app: #111316;
+  --bg-panel: #15181d;
+  --bg-elevated: #1b1f25;
+  --bg-hover: #20252c;
+  --bg-active: #262c35;
+  --line-subtle: #252a31;
+  --line-strong: #343b45;
+  --text-primary: #e7eaf0;
+  --text-secondary: #8b929d;
+  --text-muted: #5e6672;
+  --green: #2edb83;
+  --red: #ff526b;
+  --up: var(--green);
+  --down: var(--red);
+  --warning: #d9a441;
+  --accent: #4f7cff;
+  --accent-soft: rgba(79, 124, 255, 0.16);
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --tabs-height: 34px;
+  --toolbar-height: 40px;
+  --left-tools-width: 42px;
+  --right-dock-width: 292px;
+  --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Noto Sans SC", system-ui, sans-serif;
+}
+
+:root[data-up-color="red"] {
+  --up: var(--red);
+  --down: var(--green);
+}

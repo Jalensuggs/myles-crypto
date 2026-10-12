@@ -1,0 +1,587 @@
+import {
+  HistogramSeries,
+  createChart,
+  type IChartApi,
+  type ISeriesApi,
+  type ISeriesPrimitive,
+  type LogicalRange,
+  type MouseEventParams,
+  type SeriesType,
+  type Time,
+} from "lightweight-charts";
+import { ChevronsRight } from "lucide-react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { DrawingLayer } from "@/components/drawing/DrawingLayer";
+import { fetchCandlePage, fetchOfficialHistory, provider } from "@/data";
+import { KLINE_PAGE_SIZE } from "@/data/binance/endpoints";
+import { describeError } from "@/data/binance/provider";
+import { loadLatest, loadOlder, type LoaderOptions, type PageFetcher } from "@/data/candle-loader";
+import { mergeCandle, mergeCandleLists } from "@/data/candles";
+import type { IndicatorConfig } from "@/features/indicators/config";
+import { aggregateLast, aggregateSession, sessionPlan } from "@/features/session/aggregate";
+import { matchesContract, mergeOfficial } from "@/features/session/official";
+import { isUsRegularSession } from "@/features/session/us-session";
+import { useDrawingsStore } from "@/stores/drawings.store";
+import { trendColors, usePreferencesStore, type TrendColors } from "@/stores/preferences.store";
+import { useTickersStore } from "@/stores/tickers.store";
+import { useWorkspaceStore } from "@/stores/workspace.store";
+import {
+  TIMEFRAME_LABELS,
+  TIMEFRAME_SECONDS,
+  categoryOf,
+  displayName,
+  marketKey,
+  type Candle,
+  type ChartType,
+  type MarketTab,
+} from "@/types/market";
+import { screenshotRegistry, type ChartBridge, type OverlayPainter } from "./bridge";
+import {
+  FONT_FAMILY,
+  applySeriesStyle,
+  chartOptions,
+  chartTimeOffset,
+  createMainSeries,
+  toMainData,
+  toMainPoint,
+  toVolumeData,
+  toVolumePoint,
+} from "./chart-theme";
+import { IndicatorLabels, type IndicatorLabelsHandle } from "./IndicatorLabels";
+import { IndicatorLayer } from "./indicator-layer";
+import { Legend, type LegendHandle } from "./Legend";
+
+interface ChartPaneProps {
+  tab: MarketTab;
+  index: number;
+  focused: boolean;
+  multi: boolean;
+}
+
+/** 回调里需要读到的最新值。放在 ref 里，避免为了它们重建图表或重订数据。 */
+interface LiveState {
+  chartType: ChartType;
+  colors: TrendColors;
+  precision: number;
+  /** 图表时间相对真实时间的偏移（秒） */
+  offset: number;
+  stepSeconds: number;
+  /** 当前图表上实际显示的数据属于哪个标的和周期 */
+  shown: string;
+  title: string;
+  token: number;
+  /** 已取到的最早一根原始 K 线的时间，过滤掉的也算，用来继续往前翻页 */
+  oldestRaw: number | null;
+  hasMore: boolean;
+  loadingMore: boolean;
+  hovering: boolean;
+}
+
+const INITIAL_VISIBLE_BARS = 140;
+const LOAD_MORE_MARGIN = 20;
+/** 只看交易时段时，首屏至少凑够这么多根，够画出最长的那条均线 */
+const MIN_SESSION_BARS = 300;
+const MAX_INITIAL_PAGES = 8;
+/** 合成的周期（1 时、4 时、1 日）需要更多原始 K 线，允许多翻几页 */
+const MAX_INITIAL_PAGES_GROUPED = 12;
+const SESSION_SECONDS = 6.5 * 3600;
+const MIN_MORE_BARS = 100;
+const MAX_MORE_PAGES = 5;
+
+export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }: ChartPaneProps) {
+  const { market, timeframe, chartType } = tab;
+  const key = marketKey(market);
+  const upColor = usePreferencesStore((s) => s.upColor);
+  const colors = useMemo(() => trendColors(upColor), [upColor]);
+  const precision = useTickersStore((s) => s.precision[key]) ?? 2;
+  const maOn = usePreferencesStore((s) => s.indicatorMa);
+  const maPeriods = usePreferencesStore((s) => s.maPeriods);
+  const macdOn = usePreferencesStore((s) => s.indicatorMacd);
+  const rsiOn = usePreferencesStore((s) => s.indicatorRsi);
+  const isStock = categoryOf(market) === "stock";
+  const sessionOnly = usePreferencesStore((s) => s.stockSessionOnly) && isStock;
+  const indicatorConfig = useMemo<IndicatorConfig>(
+    () => ({ ma: maOn ? maPeriods : [], macd: macdOn, rsi: rsiOn }),
+    [maOn, maPeriods, macdOn, rsiOn],
+  );
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const legendRef = useRef<LegendHandle>(null);
+  const labelsRef = useRef<IndicatorLabelsHandle>(null);
+  const indicatorsRef = useRef<IndicatorLayer | null>(null);
+  /** 在图例里显示第 index 根 K 线的数值，传 null 表示显示最新一根 */
+  const showRef = useRef<(index: number | null) => void>(() => {});
+  const chartRef = useRef<IChartApi | null>(null);
+  const mainRef = useRef<ISeriesApi<SeriesType> | null>(null);
+  const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const candlesRef = useRef<Candle[]>([]);
+  const primitiveRef = useRef<ISeriesPrimitive<Time> | null>(null);
+  const painterRef = useRef<OverlayPainter | null>(null);
+  const loadMoreRef = useRef<() => void>(() => {});
+  const live = useRef<LiveState>({
+    chartType,
+    colors,
+    precision,
+    offset: 0,
+    stepSeconds: TIMEFRAME_SECONDS[timeframe],
+    shown: "",
+    title: "",
+    token: 0,
+    oldestRaw: null,
+    hasMore: true,
+    loadingMore: false,
+    hovering: false,
+  });
+
+  const [bridge, setBridge] = useState<ChartBridge | null>(null);
+  const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
+  const [error, setError] = useState<string | null>(null);
+  const [hasData, setHasData] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  /** 当前图表的历史部分是否来自官方股价数据 */
+  const [officialOn, setOfficialOn] = useState(false);
+  const [atLatest, setAtLatest] = useState(true);
+  const [reloadNonce, setReloadNonce] = useState(0);
+
+  // 先同步最新的样式参数，后面的 effect 创建序列时要用
+  useEffect(() => {
+    live.current.colors = colors;
+    live.current.precision = precision;
+  });
+
+  // ── 创建图表（每个面板只创建一次）──
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const L = live.current;
+    const chart = createChart(container, chartOptions());
+    chartRef.current = chart;
+
+    const volume = chart.addSeries(HistogramSeries, {
+      priceFormat: { type: "volume" },
+      priceScaleId: "volume",
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
+    volumeRef.current = volume;
+    indicatorsRef.current = new IndicatorLayer(chart);
+
+    const listeners = new Set<() => void>();
+    // 这些回调是在图表内部的重绘流程里被调用的，任何一个抛错都会打断图表自身的逻辑，所以逐个兜住
+    const notify = () => {
+      for (const listener of listeners) {
+        try {
+          listener();
+        } catch (e) {
+          console.error("图表视图回调出错", e);
+        }
+      }
+    };
+    // 这个图元不画任何东西，只借用图表的重绘时机通知绘图层刷新坐标
+    primitiveRef.current = {
+      updateAllViews: notify,
+      paneViews: () => [{ zOrder: () => "bottom", renderer: () => ({ draw: notify }) }],
+    };
+
+    const show = (index: number | null) => {
+      const list = candlesRef.current;
+      const i = index ?? list.length - 1;
+      const candle = list[i];
+      const indicators = candle ? indicatorsRef.current?.valuesAt(i) : undefined;
+      legendRef.current?.set(candle ? { candle, previousClose: list[i - 1]?.close, indicators } : null);
+      labelsRef.current?.set(indicators ?? null);
+    };
+    showRef.current = show;
+
+    const onCrosshair = (param: MouseEventParams) => {
+      const index = param.point && param.logical !== undefined ? Math.round(param.logical) : -1;
+      if (!candlesRef.current[index]) {
+        L.hovering = false;
+        show(null);
+        return;
+      }
+      L.hovering = true;
+      show(index);
+    };
+
+    const onRange = (range: LogicalRange | null) => {
+      setAtLatest(chart.timeScale().scrollPosition() > -3);
+      if (range && range.from < LOAD_MORE_MARGIN) loadMoreRef.current();
+    };
+
+    chart.subscribeCrosshairMove(onCrosshair);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(onRange);
+
+    setBridge({
+      chart,
+      series: () => mainRef.current,
+      candles: () => candlesRef.current,
+      stepSeconds: () => L.stepSeconds,
+      onViewChange: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      setOverlayPainter: (painter) => {
+        painterRef.current = painter;
+      },
+    });
+
+    screenshotRegistry.set(index, () => {
+      const canvas = chart.takeScreenshot();
+      const ctx = canvas.getContext("2d");
+      const cssWidth = container.clientWidth;
+      if (ctx && cssWidth > 0) {
+        const ratio = canvas.width / cssWidth;
+        painterRef.current?.(ctx, ratio);
+        ctx.save();
+        ctx.scale(ratio, ratio);
+        ctx.font = `600 13px ${FONT_FAMILY}`;
+        ctx.fillStyle = "#e7eaf0";
+        ctx.textBaseline = "top";
+        ctx.fillText(`${L.title} · Myles crypto`, 12, 10);
+        ctx.restore();
+      }
+      return canvas;
+    });
+
+    return () => {
+      screenshotRegistry.delete(index);
+      chart.unsubscribeCrosshairMove(onCrosshair);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange);
+      listeners.clear();
+      chart.remove();
+      chartRef.current = null;
+      mainRef.current = null;
+      volumeRef.current = null;
+      indicatorsRef.current = null;
+      showRef.current = () => {};
+      primitiveRef.current = null;
+      setBridge(null);
+    };
+  }, [index]);
+
+  // ── 主序列：图表类型变化时重建 ──
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const L = live.current;
+    const series = createMainSeries(chart, chartType, L.colors, L.precision);
+    if (primitiveRef.current) series.attachPrimitive(primitiveRef.current);
+    L.chartType = chartType;
+    series.setData(toMainData(candlesRef.current, chartType, L.offset));
+    // 新建的序列默认在最上层，把它放回成交量之上、均线之下
+    if (series.getPane().getSeries().length > 2) series.setSeriesOrder(1);
+    mainRef.current = series;
+    return () => {
+      if (mainRef.current === series) mainRef.current = null;
+      // 图表已经销毁时序列也跟着没了，不需要再移除
+      if (chartRef.current === chart) chart.removeSeries(series);
+    };
+  }, [chartType]);
+
+  // ── 颜色与精度 ──
+  useEffect(() => {
+    const main = mainRef.current;
+    if (main) applySeriesStyle(main, chartType, colors, precision);
+  }, [chartType, colors, precision]);
+
+  useEffect(() => {
+    volumeRef.current?.setData(toVolumeData(candlesRef.current, colors, live.current.offset));
+  }, [colors]);
+
+  // ── 技术指标：开关、均线周期、颜色或精度变化时重建并重算 ──
+  useEffect(() => {
+    const layer = indicatorsRef.current;
+    if (!layer) return;
+    layer.configure(indicatorConfig, colors, precision);
+    layer.setData(candlesRef.current, live.current.offset);
+    if (!live.current.hovering) showRef.current(null);
+  }, [indicatorConfig, colors, precision]);
+
+  // ── 数据：标的或周期变化时重新加载并订阅 ──
+  useEffect(() => {
+    const L = live.current;
+    const token = ++L.token;
+    const step = TIMEFRAME_SECONDS[timeframe];
+    const target = `${key}|${timeframe}|${sessionOnly ? "session" : "all"}`;
+    const sameAsShown = L.shown === target;
+    // 美股只保留常规交易时段的 K 线，这样 K 线根数和均线才和股票软件对得上。
+    // 1 时、4 时、1 日还要用 30 分钟线从 9:30 起重新合成，见 features/session/aggregate.ts
+    const plan = sessionOnly ? sessionPlan(timeframe) : null;
+    const sourceTimeframe = plan?.source ?? timeframe;
+    const sourceStep = TIMEFRAME_SECONDS[sourceTimeframe];
+    const group = plan?.groupMinutes ?? null;
+    const perGroup = plan?.barsPerGroup ?? 1;
+    const keep = sessionOnly ? (c: Candle) => isUsRegularSession(c.time, sourceStep) : undefined;
+    const fetchPage: PageFetcher = (endTime) => fetchCandlePage(market, sourceTimeframe, endTime);
+    const loader: LoaderOptions = {
+      keep,
+      pageSize: KLINE_PAGE_SIZE,
+      minBars: MIN_SESSION_BARS * perGroup,
+      maxPages: group ? MAX_INITIAL_PAGES_GROUPED : MAX_INITIAL_PAGES,
+    };
+    // source 是从合约数据源取来（并过滤后）的 K 线。图表上显示的 candlesRef 由它得来：
+    // 需要合成的周期先合成，有官方股价历史时再把历史部分换成官方数据。
+    let source: Candle[] = [];
+    let official: Candle[] | null = null;
+    const toTargets = (list: Candle[]) => (group ? aggregateSession(list, group) : list);
+    // 一根 K 线最长也就一个交易时段（6.5 小时）。过了这个时间就算走完，官方数据不会再变。
+    const barSpan = Math.min(step, SESSION_SECONDS);
+    const isComplete = (c: Candle) => c.time + barSpan <= Date.now() / 1000;
+    const rebuild = () => {
+      const contract = toTargets(source);
+      candlesRef.current = official ? mergeOfficial(contract, official, isComplete) : contract;
+    };
+    L.hasMore = true;
+    L.loadingMore = false;
+    L.title = `${displayName(market)} · ${TIMEFRAME_LABELS[timeframe]}`;
+
+    setPhase("loading");
+    setError(null);
+    setSwitching(!sameAsShown && candlesRef.current.length > 0);
+
+    const offs: (() => void)[] = [];
+    const queue: Candle[] = [];
+    let raf = 0;
+    const alive = () => token === L.token;
+
+    const renderAll = () => {
+      mainRef.current?.setData(toMainData(candlesRef.current, L.chartType, L.offset));
+      volumeRef.current?.setData(toVolumeData(candlesRef.current, L.colors, L.offset));
+      indicatorsRef.current?.setData(candlesRef.current, L.offset);
+    };
+
+    const showLast = () => showRef.current(null);
+
+    const flush = () => {
+      raf = 0;
+      const main = mainRef.current;
+      const volume = volumeRef.current;
+      if (main && volume) {
+        for (const candle of queue) {
+          main.update(toMainPoint(candle, L.chartType, L.offset));
+          volume.update(toVolumePoint(candle, L.colors, L.offset));
+        }
+        indicatorsRef.current?.updateTail(candlesRef.current, L.offset, queue.length);
+      }
+      queue.length = 0;
+      if (!L.hovering) showLast();
+    };
+
+    // 实时 K 线先并入数组，再按帧批量写进图表
+    const onLive = (incoming: Candle) => {
+      if (!alive() || (keep && !keep(incoming))) return;
+      if (mergeCandle(source, incoming) === "ignored") return;
+      let candle = incoming;
+      if (group) {
+        const merged = aggregateLast(source, group);
+        if (!merged) return;
+        candle = merged;
+      }
+      // 没有合成也没有官方历史时，candlesRef 和 source 是同一个数组，上面已经更新过了
+      if (candlesRef.current !== source && mergeCandle(candlesRef.current, candle) === "ignored") return;
+      const tail = queue[queue.length - 1];
+      if (tail && tail.time === candle.time) queue[queue.length - 1] = candle;
+      else queue.push(candle);
+      if (!raf) raf = requestAnimationFrame(flush);
+    };
+
+    // 断线重连后补上缺口
+    const refill = async () => {
+      try {
+        const page = await fetchCandlePage(market, sourceTimeframe, undefined, { fresh: true });
+        if (!alive() || page.candles.length === 0) return;
+        const last = source[source.length - 1];
+        const gap = last !== undefined && page.candles[0]!.time > last.time + sourceStep;
+        const fresh = keep ? page.candles.filter(keep) : page.candles;
+        if (!gap) {
+          source = mergeCandleLists(source, fresh);
+        } else if (fresh.length > 0) {
+          // 断线太久导致新旧数据接不上时，直接以新数据为准，不留断层
+          source = [...fresh];
+          L.oldestRaw = page.candles[0]!.time;
+          L.hasMore = page.candles.length >= KLINE_PAGE_SIZE;
+        }
+        rebuild();
+        queue.length = 0;
+        renderAll();
+        setError(null);
+        setPhase("ready");
+      } catch (e) {
+        if (!alive()) return;
+        setError(`${describeError(e)}，断线期间的数据可能不完整`);
+        setPhase("error");
+      }
+    };
+
+    loadMoreRef.current = () => {
+      if (!alive() || L.loadingMore || !L.hasMore || L.shown !== target) return;
+      L.loadingMore = true;
+      void loadOlder(fetchPage, L.oldestRaw, {
+        ...loader,
+        minBars: MIN_MORE_BARS * perGroup,
+        maxPages: MAX_MORE_PAGES,
+      })
+        .then((older) => {
+          if (!alive()) return;
+          L.oldestRaw = older.oldestRaw;
+          L.hasMore = older.hasMore;
+          if (older.candles.length === 0) return;
+          source = [...older.candles, ...source];
+          rebuild();
+          renderAll();
+        })
+        .catch(() => {
+          // 向左加载失败不打断看盘，下次滚动到边界时会再试
+        })
+        .finally(() => {
+          if (alive()) L.loadingMore = false;
+        });
+    };
+
+    void (async () => {
+      try {
+        // 官方历史和合约的最新一页同时取，互不等待
+        const [history, firstPage] = await Promise.all([
+          sessionOnly ? fetchOfficialHistory(market.symbol, timeframe) : null,
+          loadLatest(fetchPage, { ...loader, minBars: 0, maxPages: 1 }),
+        ]);
+        if (!alive()) return;
+        let page = firstPage;
+        let usable = history !== null && matchesContract(history, toTargets(firstPage.candles));
+        if (!usable && keep) {
+          // 没有官方历史，或最新一页里重叠的 K 线太少还无法核对：按原来的方式多取几页合约数据
+          page = await loadLatest(fetchPage, loader);
+          if (!alive()) return;
+          usable = history !== null && matchesContract(history, toTargets(page.candles));
+        }
+        official = usable ? history : null;
+        source = page.candles;
+        rebuild();
+        L.offset = chartTimeOffset(step);
+        L.stepSeconds = step;
+        L.shown = target;
+        L.precision = page.precision;
+        // 官方历史已经覆盖的那一段不用再向合约要，更早的历史从官方数据的起点往前接
+        L.oldestRaw = official ? Math.min(page.oldestRaw ?? Infinity, official[0]!.time) : page.oldestRaw;
+        L.hasMore = official ? true : page.hasMore;
+        setOfficialOn(official !== null);
+        useTickersStore.getState().setPrecision(key, page.precision);
+        if (mainRef.current) applySeriesStyle(mainRef.current, L.chartType, L.colors, page.precision);
+        renderAll();
+
+        const chart = chartRef.current;
+        chart?.applyOptions({ timeScale: { timeVisible: step < 86400 } });
+        if (chart && !sameAsShown) {
+          const n = candlesRef.current.length;
+          chart.priceScale("right").applyOptions({ autoScale: true });
+          chart.timeScale().setVisibleLogicalRange({ from: n - INITIAL_VISIBLE_BARS, to: n + 6 });
+        }
+        showLast();
+        setHasData(candlesRef.current.length > 0);
+        setSwitching(false);
+        setPhase("ready");
+
+        offs.push(provider.subscribeCandles(market, sourceTimeframe, onLive));
+        offs.push(provider.onReconnect(market.market, () => void refill()));
+      } catch (e) {
+        if (!alive()) return;
+        if (!sameAsShown) {
+          // 新标的没加载出来时不能继续显示旧标的的图
+          source = [];
+          candlesRef.current = [];
+          L.shown = "";
+          renderAll();
+          showRef.current(null);
+          setHasData(false);
+        }
+        setSwitching(false);
+        setError(describeError(e));
+        setPhase("error");
+      }
+    })();
+
+    return () => {
+      L.token += 1;
+      for (const off of offs) off();
+      if (raf) cancelAnimationFrame(raf);
+      loadMoreRef.current = () => {};
+    };
+    // market 的内容由 key 唯一确定
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, timeframe, sessionOnly, reloadNonce]);
+
+  const retry = () => setReloadNonce((n) => n + 1);
+
+  return (
+    <section
+      className="pane"
+      aria-label={`${displayName(market)} ${TIMEFRAME_LABELS[timeframe]} 图表`}
+      data-testid={`pane-${index}`}
+      data-symbol={displayName(market)}
+      data-timeframe={timeframe}
+      data-phase={phase}
+      data-session={sessionOnly ? "regular" : "all"}
+      data-history={sessionOnly && officialOn ? "official" : "contract"}
+      data-focused={focused}
+      data-multi={multi}
+      data-switching={switching}
+      onPointerDownCapture={() => useWorkspaceStore.getState().focusPane(index)}
+      onPointerDown={() => {
+        const drawings = useDrawingsStore.getState();
+        if (drawings.selected) drawings.select(null);
+      }}
+    >
+      {phase === "loading" && <div className="pane__loading" role="progressbar" aria-label="正在加载行情" />}
+      <Legend
+        ref={legendRef}
+        market={market}
+        timeframe={timeframe}
+        precision={precision}
+        sessionOnly={sessionOnly}
+        official={sessionOnly && officialOn}
+      />
+      <div className="pane__chart" ref={containerRef} />
+      {bridge && <DrawingLayer bridge={bridge} marketKey={key} precision={precision} />}
+      {bridge && (
+        <IndicatorLabels
+          ref={labelsRef}
+          bridge={bridge}
+          layer={indicatorsRef}
+          container={containerRef}
+          precision={precision}
+        />
+      )}
+
+      {phase === "error" && !hasData && (
+        <div className="pane__notice" role="alert">
+          <div>{error}</div>
+          <button type="button" className="btn" onClick={retry}>
+            重试
+          </button>
+        </div>
+      )}
+      {phase === "error" && hasData && (
+        <div className="pane__banner" role="alert">
+          {error}
+          <button type="button" className="btn btn--sm" onClick={retry}>
+            重试
+          </button>
+        </div>
+      )}
+      {phase === "ready" && !hasData && <div className="pane__notice">这个标的暂时没有 K 线数据</div>}
+
+      {!atLatest && hasData && (
+        <button
+          type="button"
+          className="pane__latest"
+          onClick={() => chartRef.current?.timeScale().scrollToRealTime()}
+        >
+          回到最新
+          <ChevronsRight size={14} />
+        </button>
+      )}
+    </section>
+  );
+});
