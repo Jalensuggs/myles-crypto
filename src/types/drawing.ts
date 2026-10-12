@@ -1,4 +1,13 @@
-export type DrawingType = "trend-line" | "horizontal-line" | "rectangle";
+export const DRAWING_TYPES = [
+  "trend-line",
+  "ray",
+  "horizontal-line",
+  "channel",
+  "rectangle",
+  "fib",
+  "text",
+] as const;
+export type DrawingType = (typeof DRAWING_TYPES)[number];
 export type DrawingTool = "cursor" | DrawingType;
 
 export interface DrawingPoint {
@@ -6,6 +15,8 @@ export interface DrawingPoint {
   time: number;
   price: number;
 }
+
+export type DrawingWidth = 1 | 2 | 3;
 
 export interface DrawingObject {
   id: string;
@@ -15,7 +26,40 @@ export interface DrawingObject {
   hidden: boolean;
   /** 线条颜色，形如 #2edb83；旧数据没有这一项时用默认色 */
   color?: string;
+  /** 粗细：1 细、2 中、3 粗；没有时为细 */
+  width?: DrawingWidth;
+  /** 是否画成虚线 */
+  dash?: boolean;
+  /** 文字标注的内容 */
+  text?: string;
 }
+
+/** 每种图形需要点几下 */
+export const POINTS_REQUIRED: Record<DrawingType, number> = {
+  "trend-line": 2,
+  ray: 2,
+  "horizontal-line": 1,
+  channel: 3,
+  rectangle: 2,
+  fib: 2,
+  text: 1,
+};
+
+export const TOOL_LABELS: Record<DrawingTool, string> = {
+  cursor: "光标",
+  "trend-line": "趋势线",
+  ray: "射线",
+  "horizontal-line": "水平线",
+  channel: "平行通道",
+  rectangle: "矩形",
+  fib: "斐波那契回撤",
+  text: "文字标注",
+};
+
+/** 斐波那契回撤的各档比例。0 在终点，1 在起点。 */
+export const FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1] as const;
+
+export const MAX_TEXT_LENGTH = 60;
 
 export const DEFAULT_DRAWING_COLOR = "#4f7cff";
 
@@ -31,6 +75,10 @@ export const DRAWING_COLORS: { value: string; label: string }[] = [
   { value: "#e7eaf0", label: "白色" },
 ];
 
+export const WIDTH_LABELS: Record<DrawingWidth, string> = { 1: "细", 2: "中", 3: "粗" };
+const WIDTH_PIXELS: Record<DrawingWidth, number> = { 1: 1.5, 2: 2.5, 3: 4 };
+export const DASH_PATTERN = "7 5";
+
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 
 export function isHexColor(value: unknown): value is string {
@@ -41,15 +89,7 @@ export function colorOf(drawing: Pick<DrawingObject, "color">): string {
   return isHexColor(drawing.color) ? drawing.color : DEFAULT_DRAWING_COLOR;
 }
 
-export const POINTS_REQUIRED: Record<DrawingType, number> = {
-  "trend-line": 2,
-  "horizontal-line": 1,
-  rectangle: 2,
-};
-
-export const TOOL_LABELS: Record<DrawingTool, string> = {
-  cursor: "光标",
-  "trend-line": "趋势线",
-  "horizontal-line": "水平线",
-  rectangle: "矩形",
-};
+/** 线条的像素宽度 */
+export function strokeOf(drawing: Pick<DrawingObject, "width">): number {
+  return WIDTH_PIXELS[drawing.width ?? 1] ?? WIDTH_PIXELS[1];
+}

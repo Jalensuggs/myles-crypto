@@ -1,10 +1,21 @@
-import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { ChartBridge } from "@/components/chart/bridge";
 import { formatPrice, uid } from "@/lib/format";
 import { selectDrawings, useDrawingsStore } from "@/stores/drawings.store";
 import { usePreferencesStore } from "@/stores/preferences.store";
-import { POINTS_REQUIRED, colorOf, type DrawingObject, type DrawingPoint, type DrawingType } from "@/types/drawing";
 import {
+  DASH_PATTERN,
+  MAX_TEXT_LENGTH,
+  POINTS_REQUIRED,
+  colorOf,
+  strokeOf,
+  type DrawingObject,
+  type DrawingPoint,
+  type DrawingType,
+} from "@/types/drawing";
+import {
+  fibLabel,
+  handlePoints,
   makeProjector,
   paintShapes,
   pointAt,
@@ -14,15 +25,17 @@ import {
   type Shape,
 } from "./geometry";
 
+/** 画到一半的图形：已经点下的点，加上鼠标当前所在的点 */
 interface Draft {
   type: DrawingType;
-  points: [DrawingPoint, DrawingPoint];
+  points: DrawingPoint[];
+  cursor: DrawingPoint;
   downAt: { x: number; y: number };
 }
 
 interface Drag {
   id: string;
-  /** move 表示整体拖动，数字表示拖动第几个端点 */
+  /** move 表示整体拖动，数字表示拖动第几个控制点 */
   mode: "move" | number;
   startX: number;
   startY: number;
@@ -38,6 +51,8 @@ interface DrawingLayerProps {
 
 const DRAG_THRESHOLD = 3;
 const DRAW_DRAG_THRESHOLD = 6;
+/** 选中时线条加粗这么多像素 */
+const SELECTED_EXTRA = 0.75;
 
 function safeProjector(bridge: ChartBridge): Projector | null {
   try {
@@ -47,17 +62,28 @@ function safeProjector(bridge: ChartBridge): Projector | null {
   }
 }
 
+function askText(current = ""): string | null {
+  const input = window.prompt(`输入要标注的文字（最多 ${MAX_TEXT_LENGTH} 个字）`, current);
+  if (input === null) return null;
+  const text = input.trim().slice(0, MAX_TEXT_LENGTH);
+  return text === "" ? null : text;
+}
+
 export const DrawingLayer = memo(function DrawingLayer({ bridge, marketKey: key, precision }: DrawingLayerProps) {
   const selector = useMemo(() => selectDrawings(key), [key]);
   const drawings = useDrawingsStore(selector);
   const tool = useDrawingsStore((s) => s.tool);
   const selectedId = useDrawingsStore((s) => (s.selected?.key === key ? s.selected.id : null));
   const lockedAll = useDrawingsStore((s) => s.lockedAll);
-  const currentColor = usePreferencesStore((s) => s.drawingColor);
   const hiddenAll = useDrawingsStore((s) => s.hiddenAll);
+  const currentColor = usePreferencesStore((s) => s.drawingColor);
+  const currentWidth = usePreferencesStore((s) => s.drawingWidth);
+  const currentDash = usePreferencesStore((s) => s.drawingDash);
 
   const svgRef = useRef<SVGSVGElement>(null);
   const dragRef = useRef<Drag | null>(null);
+  /** 这一次按下是否刚刚开始了一个新图形。只有这种情况下，松开时才考虑"按住拖出一条线"。 */
+  const startedHereRef = useRef(false);
   const [, setTick] = useState(0);
   const [draft, setDraft] = useState<Draft | null>(null);
   /** 选了绘图工具后鼠标所在的位置，用来画落点预览 */
@@ -79,6 +105,7 @@ export const DrawingLayer = memo(function DrawingLayer({ bridge, marketKey: key,
     [],
   );
 
+  // 截图时把绘图也画上去
   useEffect(() => {
     bridge.setOverlayPainter((ctx, pixelRatio) => {
       if (hiddenAll) return;
@@ -88,12 +115,14 @@ export const DrawingLayer = memo(function DrawingLayer({ bridge, marketKey: key,
       for (const drawing of drawings) {
         if (drawing.hidden) continue;
         const shape = projectDrawing(drawing, p);
-        if (shape) items.push({ shape, color: colorOf(drawing) });
+        if (shape) {
+          items.push({ shape, color: colorOf(drawing), stroke: strokeOf(drawing), dash: drawing.dash === true });
+        }
       }
-      paintShapes(ctx, items, p.width, p.height, pixelRatio);
+      paintShapes(ctx, items, p.width, p.height, pixelRatio, precision);
     });
     return () => bridge.setOverlayPainter(null);
-  }, [bridge, drawings, hiddenAll]);
+  }, [bridge, drawings, hiddenAll, precision]);
 
   const projector = safeProjector(bridge);
   const drawingTool = tool === "cursor" ? null : tool;
@@ -104,21 +133,35 @@ export const DrawingLayer = memo(function DrawingLayer({ bridge, marketKey: key,
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   };
 
-  const commit = (type: DrawingType, points: DrawingPoint[]) => {
+  const commit = (type: DrawingType, points: DrawingPoint[], text?: string) => {
     const store = useDrawingsStore.getState();
-    store.add(key, {
+    const prefs = usePreferencesStore.getState();
+    const drawing: DrawingObject = {
       id: uid("d"),
       type,
       points,
       locked: false,
       hidden: false,
-      color: usePreferencesStore.getState().drawingColor,
-    });
+      color: prefs.drawingColor,
+    };
+    if (prefs.drawingWidth !== 1) drawing.width = prefs.drawingWidth;
+    if (prefs.drawingDash) drawing.dash = true;
+    if (text !== undefined) drawing.text = text;
+    store.add(key, drawing);
     store.setTool("cursor");
     setDraft(null);
   };
 
   const samePoint = (a: DrawingPoint, b: DrawingPoint) => a.time === b.time && a.price === b.price;
+
+  /** 把一个新点加进正在画的图形；点数够了就完成 */
+  const addPoint = (current: Draft, point: DrawingPoint) => {
+    const last = current.points[current.points.length - 1]!;
+    if (samePoint(last, point)) return;
+    const points = [...current.points, point];
+    if (points.length >= POINTS_REQUIRED[current.type]) commit(current.type, points);
+    else setDraft({ ...current, points, cursor: point });
+  };
 
   const onCaptureDown = (e: ReactPointerEvent<SVGRectElement>) => {
     if (e.button !== 0 || !projector || !drawingTool) return;
@@ -126,15 +169,25 @@ export const DrawingLayer = memo(function DrawingLayer({ bridge, marketKey: key,
     const { x, y } = local(e);
     const point = pointAt(projector, x, y);
     if (!point) return;
+
+    startedHereRef.current = false;
+    if (drawingTool === "text") {
+      const text = askText();
+      if (text) commit("text", [point], text);
+      else useDrawingsStore.getState().setTool("cursor");
+      return;
+    }
     if (POINTS_REQUIRED[drawingTool] === 1) {
       commit(drawingTool, [point]);
       return;
     }
     if (!activeDraft) {
-      setDraft({ type: drawingTool, points: [point, point], downAt: { x, y } });
-      return;
+      startedHereRef.current = true;
+      setDraft({ type: drawingTool, points: [point], cursor: point, downAt: { x, y } });
+    } else {
+      startedHereRef.current = false;
+      addPoint(activeDraft, point);
     }
-    if (!samePoint(activeDraft.points[0], point)) commit(drawingTool, [activeDraft.points[0], point]);
   };
 
   const onCaptureMove = (e: ReactPointerEvent<SVGRectElement>) => {
@@ -142,16 +195,20 @@ export const DrawingLayer = memo(function DrawingLayer({ bridge, marketKey: key,
     setHover({ x, y });
     if (!activeDraft || !projector) return;
     const point = pointAt(projector, x, y);
-    if (point) setDraft({ ...activeDraft, points: [activeDraft.points[0], point] });
+    if (point) setDraft({ ...activeDraft, cursor: point });
   };
 
-  // 也支持按住拖出一条线：松开时移动距离足够就直接完成
+  // 也支持按住拖出一条线：松开时移动距离足够，就把松开的位置当作第二个点
   const onCaptureUp = (e: ReactPointerEvent<SVGRectElement>) => {
-    if (!activeDraft || !projector) return;
+    // 如果这次按下已经放下了一个点（第二下、第三下），松开时什么都不做。
+    // 否则按下和松开挨得很近、界面还没来得及更新时，同一个点会被算两次，画出重复的图形。
+    const startedHere = startedHereRef.current;
+    startedHereRef.current = false;
+    if (!startedHere || !activeDraft || !projector || activeDraft.points.length !== 1) return;
     const { x, y } = local(e);
     if (Math.hypot(x - activeDraft.downAt.x, y - activeDraft.downAt.y) < DRAW_DRAG_THRESHOLD) return;
     const point = pointAt(projector, x, y);
-    if (point && !samePoint(activeDraft.points[0], point)) commit(activeDraft.type, [activeDraft.points[0], point]);
+    if (point) addPoint(activeDraft, point);
   };
 
   const onShapeDown = (e: ReactPointerEvent<SVGElement>, drawing: DrawingObject, mode: Drag["mode"]) => {
@@ -201,52 +258,86 @@ export const DrawingLayer = memo(function DrawingLayer({ bridge, marketKey: key,
     if (drag.moved) useDrawingsStore.getState().endDrag();
   };
 
+  const editText = (drawing: DrawingObject) => {
+    if (drawing.locked || lockedAll) return;
+    const text = askText(drawing.text ?? "");
+    if (text && text !== drawing.text) useDrawingsStore.getState().patch(key, drawing.id, { text });
+  };
+
   const width = projector?.width ?? 0;
   const height = projector?.height ?? 0;
 
-  const renderShape = (shape: Shape, selected: boolean, key?: string) => {
-    const k = key ?? "draft";
-    if (shape.type === "horizontal-line") {
-      return (
-        <g key={k}>
-          <line className="drawing" data-selected={selected} x1={0} x2={width} y1={shape.y} y2={shape.y} />
-          <text className="drawing__label" x={width - 6} y={shape.y - 5} textAnchor="end">
-            {formatPrice(shape.price, precision)}
+  /** 画出图形本身。stroke 和 dash 用行内样式，才能盖过样式表里的默认值。 */
+  const renderShape = (shape: Shape, style: CSSProperties) => {
+    switch (shape.type) {
+      case "horizontal-line":
+        return (
+          <>
+            <line className="drawing" style={style} x1={0} x2={width} y1={shape.y} y2={shape.y} />
+            <text className="drawing__label" x={width - 6} y={shape.y - 5} textAnchor="end">
+              {formatPrice(shape.price, precision)}
+            </text>
+          </>
+        );
+      case "trend-line":
+      case "ray":
+        return <line className="drawing" style={style} x1={shape.x1} y1={shape.y1} x2={shape.x2} y2={shape.y2} />;
+      case "channel":
+        return (
+          <>
+            <line className="drawing" style={style} x1={shape.x1} y1={shape.y1} x2={shape.x2} y2={shape.y2} />
+            <line
+              className="drawing"
+              style={style}
+              x1={shape.x1}
+              y1={shape.y1 + shape.offset}
+              x2={shape.x2}
+              y2={shape.y2 + shape.offset}
+            />
+            <polygon
+              className="drawing__fill"
+              points={`${shape.x1},${shape.y1} ${shape.x2},${shape.y2} ${shape.x2},${shape.y2 + shape.offset} ${shape.x1},${shape.y1 + shape.offset}`}
+            />
+          </>
+        );
+      case "rectangle":
+        return (
+          <rect
+            className="drawing drawing--rect"
+            style={style}
+            x={Math.min(shape.x1, shape.x2)}
+            y={Math.min(shape.y1, shape.y2)}
+            width={Math.abs(shape.x2 - shape.x1)}
+            height={Math.abs(shape.y2 - shape.y1)}
+          />
+        );
+      case "fib":
+        return (
+          <>
+            {shape.levels.map((level) => (
+              <g key={level.ratio}>
+                <line className="drawing" style={style} x1={shape.x1} x2={shape.x2} y1={level.y} y2={level.y} />
+                <text className="drawing__label" x={shape.x1 + 4} y={level.y - 4}>
+                  {fibLabel(level, precision)}
+                </text>
+              </g>
+            ))}
+          </>
+        );
+      case "text":
+        return (
+          <text className="drawing__text" x={shape.x} y={shape.y}>
+            {shape.text}
           </text>
-        </g>
-      );
+        );
     }
-    if (shape.type === "trend-line") {
-      return (
-        <line
-          key={k}
-          className="drawing"
-          data-selected={selected}
-          x1={shape.x1}
-          y1={shape.y1}
-          x2={shape.x2}
-          y2={shape.y2}
-        />
-      );
-    }
-    return (
-      <rect
-        key={k}
-        className="drawing drawing--rect"
-        data-selected={selected}
-        x={Math.min(shape.x1, shape.x2)}
-        y={Math.min(shape.y1, shape.y2)}
-        width={Math.abs(shape.x2 - shape.x1)}
-        height={Math.abs(shape.y2 - shape.y1)}
-      />
-    );
   };
 
-  const renderHit = (drawing: DrawingObject, shape: Shape) => {
-    const locked = drawing.locked || lockedAll;
+  /** 透明的加粗区域，方便用鼠标点中细线。每种图形可能有多条。 */
+  const renderHits = (drawing: DrawingObject, shape: Shape) => {
     const common = {
       className: "drawing__hit",
-      "data-locked": locked,
+      "data-locked": drawing.locked || lockedAll,
       "data-testid": `drawing-${drawing.type}`,
       "data-color": colorOf(drawing),
       onPointerDown: (e: ReactPointerEvent<SVGElement>) => onShapeDown(e, drawing, "move"),
@@ -254,31 +345,62 @@ export const DrawingLayer = memo(function DrawingLayer({ bridge, marketKey: key,
       onPointerUp: onShapeUp,
       onPointerCancel: onShapeUp,
     };
-    if (shape.type === "horizontal-line") return <line {...common} x1={0} x2={width} y1={shape.y} y2={shape.y} />;
-    if (shape.type === "trend-line") return <line {...common} x1={shape.x1} y1={shape.y1} x2={shape.x2} y2={shape.y2} />;
-    return (
-      <rect
-        {...common}
-        x={Math.min(shape.x1, shape.x2)}
-        y={Math.min(shape.y1, shape.y2)}
-        width={Math.abs(shape.x2 - shape.x1)}
-        height={Math.abs(shape.y2 - shape.y1)}
-      />
-    );
+    switch (shape.type) {
+      case "horizontal-line":
+        return <line {...common} x1={0} x2={width} y1={shape.y} y2={shape.y} />;
+      case "trend-line":
+      case "ray":
+        return <line {...common} x1={shape.x1} y1={shape.y1} x2={shape.x2} y2={shape.y2} />;
+      case "channel":
+        return (
+          <>
+            <line {...common} x1={shape.x1} y1={shape.y1} x2={shape.x2} y2={shape.y2} />
+            <line {...common} x1={shape.x1} y1={shape.y1 + shape.offset} x2={shape.x2} y2={shape.y2 + shape.offset} />
+          </>
+        );
+      case "rectangle":
+        return (
+          <rect
+            {...common}
+            x={Math.min(shape.x1, shape.x2)}
+            y={Math.min(shape.y1, shape.y2)}
+            width={Math.abs(shape.x2 - shape.x1)}
+            height={Math.abs(shape.y2 - shape.y1)}
+          />
+        );
+      case "fib":
+        return (
+          <>
+            {shape.levels.map((level) => (
+              <line key={level.ratio} {...common} x1={shape.x1} x2={shape.x2} y1={level.y} y2={level.y} />
+            ))}
+          </>
+        );
+      case "text":
+        return (
+          <text
+            {...common}
+            className="drawing__text drawing__text--hit"
+            x={shape.x}
+            y={shape.y}
+            onDoubleClick={() => editText(drawing)}
+          >
+            {shape.text}
+          </text>
+        );
+    }
   };
 
-  const renderHandles = (drawing: DrawingObject, shape: Shape) => {
-    if (shape.type === "horizontal-line" || drawing.locked || lockedAll) return null;
-    const ends: [number, number][] = [
-      [shape.x1, shape.y1],
-      [shape.x2, shape.y2],
-    ];
-    return ends.map(([cx, cy], i) => (
+  const renderHandles = (drawing: DrawingObject) => {
+    // 水平线和文字整体拖动就够了，不需要单独的控制点
+    if (!projector || drawing.type === "horizontal-line" || drawing.type === "text") return null;
+    if (drawing.locked || lockedAll) return null;
+    return handlePoints(drawing, projector).map((pt, i) => (
       <circle
         key={i}
         className="drawing__handle"
-        cx={cx}
-        cy={cy}
+        cx={pt.x}
+        cy={pt.y}
         r={5}
         onPointerDown={(e) => onShapeDown(e, drawing, i)}
         onPointerMove={onShapeMove}
@@ -288,10 +410,19 @@ export const DrawingLayer = memo(function DrawingLayer({ bridge, marketKey: key,
     ));
   };
 
-  const draftShape = activeDraft && projector ? projectDrawing(activeDraft, projector) : null;
+  const styleOf = (stroke: number, dash: boolean, selected: boolean): CSSProperties => ({
+    strokeWidth: stroke + (selected ? SELECTED_EXTRA : 0),
+    strokeDasharray: dash ? DASH_PATTERN : undefined,
+  });
+
+  const draftShape =
+    activeDraft && projector
+      ? projectDrawing({ type: activeDraft.type, points: [...activeDraft.points, activeDraft.cursor] }, projector)
+      : null;
+  const draftStroke = strokeOf({ width: currentWidth });
 
   // 落点预览：选了工具、还没点下去时，用虚线标出鼠标所在的价格。
-  // 水平线画一整条虚线（就是点下去后那条线的位置）；趋势线和矩形画十字虚线帮助对准第一个点。
+  // 水平线画一整条虚线（就是点下去后那条线的位置）；其他工具画十字虚线帮助对准第一个点。
   const hoverPrice = drawingTool && hover && projector && !activeDraft ? projector.toPrice(hover.y) : null;
   const preview =
     drawingTool && hover && hoverPrice !== null ? (
@@ -329,10 +460,18 @@ export const DrawingLayer = memo(function DrawingLayer({ bridge, marketKey: key,
           if (!shape) return null;
           const selected = drawing.id === selectedId;
           return (
-            <g key={drawing.id} style={{ color: colorOf(drawing) }}>
-              {renderShape(shape, selected, "shape")}
-              {!drawingTool && renderHit(drawing, shape)}
-              {selected && !drawingTool && renderHandles(drawing, shape)}
+            <g
+              key={drawing.id}
+              data-testid="drawing-item"
+              data-type={drawing.type}
+              data-width={drawing.width ?? 1}
+              data-dash={drawing.dash === true}
+              data-selected={selected}
+              style={{ color: colorOf(drawing) }}
+            >
+              {renderShape(shape, styleOf(strokeOf(drawing), drawing.dash === true, selected))}
+              {!drawingTool && renderHits(drawing, shape)}
+              {selected && !drawingTool && renderHandles(drawing)}
             </g>
           );
         })}
@@ -350,7 +489,11 @@ export const DrawingLayer = memo(function DrawingLayer({ bridge, marketKey: key,
           onPointerUp={onCaptureUp}
         />
       )}
-      {draftShape && <g style={{ pointerEvents: "none", color: currentColor }}>{renderShape(draftShape, true)}</g>}
+      {draftShape && (
+        <g style={{ pointerEvents: "none", color: currentColor }}>
+          {renderShape(draftShape, styleOf(draftStroke, currentDash, true))}
+        </g>
+      )}
       {preview}
     </svg>
   );

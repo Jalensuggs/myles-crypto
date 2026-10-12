@@ -58,7 +58,7 @@ export function ColorPicker() {
     const value = color.toLowerCase();
     usePreferencesStore.getState().update({ drawingColor: value });
     const drawings = useDrawingsStore.getState();
-    if (drawings.selected) drawings.setColor(drawings.selected.key, drawings.selected.id, value);
+    if (drawings.selected) drawings.patch(drawings.selected.key, drawings.selected.id, { color: value });
   };
 
   return (

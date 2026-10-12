@@ -56,6 +56,9 @@ export const preferencesSchema = z.object({
     .string()
     .regex(/^#[0-9a-f]{6}$/i)
     .default(DEFAULT_DRAWING_COLOR),
+  /** 新画的线的粗细和虚实 */
+  drawingWidth: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(1),
+  drawingDash: z.boolean().default(false),
   /** 美股图表只显示常规交易时段的 K 线 */
   stockSessionOnly: z.boolean().default(true),
   /** 均线周期，最多 4 条 */
@@ -84,6 +87,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   kdjParams: DEFAULT_KDJ,
   rsiPeriod: DEFAULT_RSI_PERIOD,
   drawingColor: DEFAULT_DRAWING_COLOR,
+  drawingWidth: 1,
+  drawingDash: false,
   stockSessionOnly: true,
   maPeriods: DEFAULT_MA_PERIODS,
 };

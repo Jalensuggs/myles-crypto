@@ -130,6 +130,23 @@ describe("持久化校验", () => {
     expect(drawingsRecordSchema.safeParse({ byMarket: { [K]: [{ ...line("a"), color: "green" }] } }).success).toBe(false);
   });
 
+  it("新的图形类型和样式都能保存，点数对不上的拒绝", () => {
+    const p = (n: number) => Array.from({ length: n }, (_, i) => ({ time: 60 * (i + 1), price: 100 + i }));
+    const make = (type: string, points: number, extra: object = {}) => ({
+      byMarket: { [K]: [{ id: "x", type, points: p(points), locked: false, hidden: false, ...extra }] },
+    });
+    expect(drawingsRecordSchema.safeParse(make("ray", 2)).success).toBe(true);
+    expect(drawingsRecordSchema.safeParse(make("channel", 3)).success).toBe(true);
+    expect(drawingsRecordSchema.safeParse(make("fib", 2, { width: 3, dash: true })).success).toBe(true);
+    expect(drawingsRecordSchema.safeParse(make("text", 1, { text: "支撑位" })).success).toBe(true);
+
+    expect(drawingsRecordSchema.safeParse(make("channel", 2)).success).toBe(false);
+    expect(drawingsRecordSchema.safeParse(make("ray", 1)).success).toBe(false);
+    expect(drawingsRecordSchema.safeParse(make("horizontal-line", 2)).success).toBe(false);
+    expect(drawingsRecordSchema.safeParse(make("trend-line", 2, { width: 5 })).success).toBe(false);
+    expect(drawingsRecordSchema.safeParse(make("text", 1, { text: "字".repeat(61) })).success).toBe(false);
+  });
+
   it("接受合法记录，拒绝缺字段或类型未知的记录", () => {
     expect(drawingsRecordSchema.safeParse({ byMarket: { [K]: [line("a")] } }).success).toBe(true);
     expect(drawingsRecordSchema.safeParse({ byMarket: { [K]: [{ ...line("a"), type: "circle" }] } }).success).toBe(false);

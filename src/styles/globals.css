@@ -447,6 +447,15 @@ input {
   border-radius: var(--radius-md);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
+.palette--style {
+  width: 168px;
+}
+.palette--style .segmented {
+  display: flex;
+}
+.palette--style .segmented button {
+  flex: 1 1 0;
+}
 .palette__title {
   margin-bottom: 6px;
   color: var(--text-muted);
@@ -716,8 +725,30 @@ input {
   stroke-width: 1;
   stroke-dasharray: 6 4;
 }
-.drawing[data-selected="true"] {
-  stroke-width: 2;
+/* 平行通道两条线之间的淡色填充 */
+.drawing__fill {
+  fill: currentColor;
+  fill-opacity: 0.08;
+  stroke: none;
+}
+.drawing__text {
+  fill: currentColor;
+  stroke: none;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font-ui);
+}
+/* 叠在文字上面的透明副本，用来接收点击和拖动 */
+.drawing__text--hit {
+  fill: transparent;
+  pointer-events: all;
+  cursor: move;
+}
+.drawing__text--hit[data-locked="true"] {
+  pointer-events: none;
+}
+[data-testid="drawing-item"][data-selected="true"] .drawing__text {
+  text-decoration: underline;
 }
 .drawing__hit {
   stroke: transparent;
@@ -1332,7 +1363,7 @@ dialog.dialog::backdrop {
   .tools {
     grid-row: 2;
     flex-direction: row;
-    justify-content: center;
+    justify-content: flex-start;
     padding: 4px 8px;
     border-right: 0;
     border-top: 1px solid var(--line-subtle);

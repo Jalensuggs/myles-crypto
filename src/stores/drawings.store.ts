@@ -28,7 +28,8 @@ interface DrawingsState extends DrawingHistory {
   remove: (key: string, id: string) => void;
   removeSelected: () => void;
   clear: (key: string) => void;
-  setColor: (key: string, id: string, color: string) => void;
+  /** 修改颜色、粗细、虚实、文字等属性，算一步可撤销的操作 */
+  patch: (key: string, id: string, patch: Partial<Pick<DrawingObject, "color" | "width" | "dash" | "text">>) => void;
   beginDrag: () => void;
   dragUpdate: (key: string, id: string, patch: Partial<Omit<DrawingObject, "id" | "type">>) => void;
   endDrag: () => void;
@@ -66,7 +67,7 @@ export const useDrawingsStore = create<DrawingsState>((set, get) => ({
     if (selected) get().remove(selected.key, selected.id);
   },
   clear: (key) => set((s) => ({ ...commit(history(s), withCleared(s.byMarket, key)), selected: null })),
-  setColor: (key, id, color) => set((s) => commit(history(s), withUpdated(s.byMarket, key, id, { color }))),
+  patch: (key, id, patch) => set((s) => commit(history(s), withUpdated(s.byMarket, key, id, patch))),
 
   beginDrag: () => set((s) => ({ dragOrigin: s.byMarket })),
   dragUpdate: (key, id, patch) => set((s) => ({ byMarket: withUpdated(s.byMarket, key, id, patch) })),

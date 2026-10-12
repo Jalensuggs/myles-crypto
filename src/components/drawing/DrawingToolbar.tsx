@@ -1,7 +1,25 @@
-import { Eraser, Eye, EyeOff, Lock, LockOpen, Minus, MousePointer2, Redo2, Square, Trash2, TrendingUp, Undo2 } from "lucide-react";
+import {
+  AlignJustify,
+  Equal,
+  Eraser,
+  Eye,
+  EyeOff,
+  Lock,
+  LockOpen,
+  Minus,
+  MousePointer2,
+  MoveUpRight,
+  Redo2,
+  Square,
+  Trash2,
+  TrendingUp,
+  Type,
+  Undo2,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { useDrawingsStore } from "@/stores/drawings.store";
 import { ColorPicker } from "./ColorPicker";
+import { StylePicker } from "./StylePicker";
 import { selectActiveTab, useWorkspaceStore } from "@/stores/workspace.store";
 import { TOOL_LABELS, type DrawingTool } from "@/types/drawing";
 import { marketKey } from "@/types/market";
@@ -9,8 +27,13 @@ import { marketKey } from "@/types/market";
 const TOOLS: { tool: DrawingTool; icon: ReactNode }[] = [
   { tool: "cursor", icon: <MousePointer2 size={17} /> },
   { tool: "trend-line", icon: <TrendingUp size={17} /> },
+  { tool: "ray", icon: <MoveUpRight size={17} /> },
   { tool: "horizontal-line", icon: <Minus size={17} /> },
+  // 两条斜着的平行线
+  { tool: "channel", icon: <Equal size={17} style={{ transform: "rotate(-30deg)" }} /> },
   { tool: "rectangle", icon: <Square size={16} /> },
+  { tool: "fib", icon: <AlignJustify size={17} /> },
+  { tool: "text", icon: <Type size={16} /> },
 ];
 
 export function DrawingToolbar() {
@@ -45,7 +68,9 @@ export function DrawingToolbar() {
           {icon}
         </button>
       ))}
+      <span className="tools__sep" />
       <ColorPicker />
+      <StylePicker />
       <span className="tools__sep" />
       <button type="button" className="tool" aria-label="撤销" title="撤销" disabled={!canUndo} onClick={actions.undo}>
         <Undo2 size={17} />

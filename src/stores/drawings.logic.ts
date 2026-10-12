@@ -1,17 +1,26 @@
 import { z } from "zod";
-import type { DrawingObject } from "@/types/drawing";
+import { DRAWING_TYPES, MAX_TEXT_LENGTH, POINTS_REQUIRED, type DrawingObject } from "@/types/drawing";
 
-export const drawingSchema = z.object({
-  id: z.string().min(1),
-  type: z.enum(["trend-line", "horizontal-line", "rectangle"]),
-  points: z.array(z.object({ time: z.number().finite(), price: z.number().finite() })).min(1).max(2),
-  locked: z.boolean(),
-  hidden: z.boolean(),
-  color: z
-    .string()
-    .regex(/^#[0-9a-f]{6}$/i)
-    .optional(),
-});
+export const drawingSchema = z
+  .object({
+    id: z.string().min(1),
+    type: z.enum(DRAWING_TYPES),
+    points: z
+      .array(z.object({ time: z.number().finite(), price: z.number().finite() }))
+      .min(1)
+      .max(3),
+    locked: z.boolean(),
+    hidden: z.boolean(),
+    color: z
+      .string()
+      .regex(/^#[0-9a-f]{6}$/i)
+      .optional(),
+    width: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
+    dash: z.boolean().optional(),
+    text: z.string().max(MAX_TEXT_LENGTH).optional(),
+  })
+  // 点数和图形类型对不上的记录画不出来，直接判为无效
+  .refine((d) => d.points.length === POINTS_REQUIRED[d.type], "点数与图形类型不符");
 
 export const drawingsRecordSchema = z.object({
   byMarket: z.record(z.string(), z.array(drawingSchema)),

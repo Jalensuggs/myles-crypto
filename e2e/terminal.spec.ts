@@ -363,6 +363,203 @@ test.describe("绘图", () => {
   });
 });
 
+test.describe("更多画图工具", () => {
+  const items = (page: Page) => page.getByTestId("drawing-item");
+  const capture = (page: Page) => page.getByTestId("drawing-capture");
+
+  test("绘图栏有全部八种工具", async ({ page }) => {
+    await open(page);
+    for (const tool of ["cursor", "trend-line", "ray", "horizontal-line", "channel", "rectangle", "fib", "text"]) {
+      await expect(page.getByTestId(`tool-${tool}`)).toBeVisible();
+    }
+    await expect(page.getByTestId("tool-ray")).toHaveAttribute("aria-label", "射线");
+    await expect(page.getByTestId("tool-fib")).toHaveAttribute("aria-label", "斐波那契回撤");
+  });
+
+  test("射线：点两下，线一直延伸到图表右边", async ({ page }) => {
+    await open(page);
+    await page.getByTestId("tool-ray").click();
+    await capture(page).click({ position: { x: 60, y: 200 } });
+    await capture(page).click({ position: { x: 160, y: 170 } });
+    await expect(items(page)).toHaveCount(1);
+    await expect(items(page)).toHaveAttribute("data-type", "ray");
+
+    const { x2, width } = await page.getByTestId("drawing-layer").evaluate((svg) => ({
+      x2: Number(svg.querySelector("line.drawing")!.getAttribute("x2")),
+      width: Number(svg.getAttribute("width")),
+    }));
+    expect(x2).toBeCloseTo(width, 0);
+  });
+
+  test("平行通道：点三下才完成，画出两条线", async ({ page }) => {
+    await open(page);
+    await page.getByTestId("tool-channel").click();
+    await capture(page).click({ position: { x: 60, y: 200 } });
+    await capture(page).click({ position: { x: 200, y: 160 } });
+    // 两个点之后还没完成
+    await expect(page.getByTestId("drawing-layer")).toHaveAttribute("data-count", "0");
+    await expect(page.getByTestId("tool-channel")).toHaveAttribute("aria-pressed", "true");
+
+    await capture(page).click({ position: { x: 130, y: 120 } });
+    await expect(items(page)).toHaveCount(1);
+    await expect(items(page)).toHaveAttribute("data-type", "channel");
+    await expect(items(page).locator("line.drawing")).toHaveCount(2);
+    await expect(page.getByTestId("tool-cursor")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("斐波那契回撤：七档横线，标出比例和价格", async ({ page }) => {
+    await open(page);
+    await page.getByTestId("tool-fib").click();
+    await capture(page).click({ position: { x: 60, y: 240 } });
+    await capture(page).click({ position: { x: 220, y: 100 } });
+    await expect(items(page)).toHaveAttribute("data-type", "fib");
+    await expect(items(page).locator("line.drawing")).toHaveCount(7);
+    const labels = await items(page).locator(".drawing__label").allTextContents();
+    expect(labels.map((l) => l.split(" ")[0])).toEqual(["0", "0.236", "0.382", "0.5", "0.618", "0.786", "1"]);
+    for (const label of labels) expect(label).toMatch(/^[\d.]+ \([\d,.]+\)$/);
+
+    // 从低点画到高点：0 档在高处，价格从上到下递减
+    const prices = labels.map((l) => Number(l.match(/\(([\d,.]+)\)/)![1]!.replace(/,/g, "")));
+    for (let i = 1; i < prices.length; i++) expect(prices[i]!).toBeLessThan(prices[i - 1]!);
+  });
+
+  test("文字标注：输入文字后显示在图上，双击可以修改，取消则不创建", async ({ page }) => {
+    await open(page);
+    page.once("dialog", (dialog) => void dialog.accept("支撑位"));
+    await page.getByTestId("tool-text").click();
+    await capture(page).click({ position: { x: 120, y: 150 } });
+    await expect(items(page)).toHaveAttribute("data-type", "text");
+    await expect(items(page).locator(".drawing__text").first()).toHaveText("支撑位");
+
+    page.once("dialog", (dialog) => void dialog.accept("压力位"));
+    await page.locator(".drawing__text--hit").dblclick();
+    await expect(items(page).locator(".drawing__text").first()).toHaveText("压力位");
+    await page.getByRole("button", { name: "撤销" }).click();
+    await expect(items(page).locator(".drawing__text").first()).toHaveText("支撑位");
+
+    page.once("dialog", (dialog) => void dialog.dismiss());
+    await page.getByTestId("tool-text").click();
+    await capture(page).click({ position: { x: 200, y: 100 } });
+    await expect(items(page)).toHaveCount(1);
+    await expect(page.getByTestId("tool-cursor")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("粗细和虚线：先选再画；选中已有的线也能改，可以撤销", async ({ page }) => {
+    await open(page);
+    await page.getByTestId("style-button").click();
+    await page.getByTestId("width-3").click();
+    await page.getByTestId("dash-on").click();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("style-button")).toHaveAttribute("data-width", "3");
+    await expect(page.getByTestId("style-button")).toHaveAttribute("data-dash", "true");
+
+    await page.getByTestId("tool-trend-line").click();
+    await capture(page).click({ position: { x: 60, y: 220 } });
+    await capture(page).click({ position: { x: 200, y: 140 } });
+    await expect(items(page)).toHaveAttribute("data-width", "3");
+    await expect(items(page)).toHaveAttribute("data-dash", "true");
+    const line = items(page).locator("line.drawing");
+    await expect(line).toHaveCSS("stroke-width", "4px");
+    await expect(line).toHaveCSS("stroke-dasharray", "7px, 5px");
+
+    // 选中这条线，改成细实线
+    await page.getByTestId("drawing-trend-line").click();
+    await expect(page.getByTestId("style-button")).toHaveAttribute("aria-label", "修改选中绘图的粗细和线型");
+    await page.getByTestId("style-button").click();
+    await page.getByTestId("width-1").click();
+    await page.getByTestId("dash-off").click();
+    await expect(items(page)).toHaveAttribute("data-width", "1");
+    await expect(items(page)).toHaveAttribute("data-dash", "false");
+    await expect(line).toHaveCSS("stroke-dasharray", "none");
+
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "撤销" }).click();
+    await expect(items(page)).toHaveAttribute("data-dash", "true");
+  });
+
+  test("新工具画的图形刷新后保留，截图不受影响", async ({ page }) => {
+    await open(page);
+    await page.getByTestId("tool-ray").click();
+    await capture(page).click({ position: { x: 60, y: 200 } });
+    await capture(page).click({ position: { x: 160, y: 170 } });
+    await page.getByTestId("tool-fib").click();
+    await capture(page).click({ position: { x: 80, y: 240 } });
+    await capture(page).click({ position: { x: 200, y: 110 } });
+    await page.getByTestId("tool-channel").click();
+    await capture(page).click({ position: { x: 60, y: 120 } });
+    await capture(page).click({ position: { x: 180, y: 90 } });
+    await capture(page).click({ position: { x: 120, y: 140 } });
+    page.once("dialog", (dialog) => void dialog.accept("注意这里"));
+    await page.getByTestId("tool-text").click();
+    await capture(page).click({ position: { x: 100, y: 60 } });
+    await expect(items(page)).toHaveCount(4);
+
+    await page.reload();
+    await expect(page.getByTestId("pane-0")).toHaveAttribute("data-phase", "ready");
+    await expect(items(page)).toHaveCount(4);
+    const types = await items(page).evaluateAll((els) => els.map((el) => (el as HTMLElement).dataset.type));
+    expect(types).toEqual(["ray", "fib", "channel", "text"]);
+
+    const downloadPromise = page.waitForEvent("download");
+    await page.getByRole("button", { name: "截图" }).click();
+    expect((await downloadPromise).suggestedFilename()).toMatch(/\.png$/);
+
+    // 换周期后都还在
+    await page.getByTestId("tf-1h").click();
+    await expect(page.getByTestId("pane-0")).toHaveAttribute("data-phase", "ready");
+    await expect(items(page)).toHaveCount(4);
+  });
+
+  test("按下和松开挨得很近时不会画出重复的图形", async ({ page }) => {
+    await open(page);
+    await page.getByTestId("tool-fib").click();
+    // 在同一轮里连续派发按下和松开，中间不给界面更新的机会
+    const tap = (fx: number, fy: number) =>
+      capture(page).evaluate(
+        (el, [x, y]) => {
+          const r = el.getBoundingClientRect();
+          const init = {
+            bubbles: true,
+            cancelable: true,
+            clientX: r.left + r.width * x!,
+            clientY: r.top + r.height * y!,
+            button: 0,
+            pointerId: 1,
+          };
+          el.dispatchEvent(new PointerEvent("pointerdown", init));
+          el.dispatchEvent(new PointerEvent("pointerup", init));
+        },
+        [fx, fy],
+      );
+    await tap(0.3, 0.7);
+    await tap(0.6, 0.3);
+    await expect(items(page)).toHaveCount(1);
+    await expect(page.getByTestId("drawing-layer")).toHaveAttribute("data-count", "1");
+  });
+
+  test("按住拖动仍然可以一次画出趋势线", async ({ page }) => {
+    await open(page);
+    await page.getByTestId("tool-trend-line").click();
+    const box = (await capture(page).boundingBox())!;
+    await page.mouse.move(box.x + 80, box.y + 200);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 160, box.y + 160, { steps: 4 });
+    await page.mouse.up();
+    await expect(items(page)).toHaveCount(1);
+    await expect(items(page)).toHaveAttribute("data-type", "trend-line");
+  });
+
+  test("按 Esc 取消画到一半的平行通道", async ({ page }) => {
+    await open(page);
+    await page.getByTestId("tool-channel").click();
+    await capture(page).click({ position: { x: 60, y: 200 } });
+    await capture(page).click({ position: { x: 200, y: 160 } });
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("drawing-layer")).toHaveAttribute("data-count", "0");
+    await expect(capture(page)).toHaveCount(0);
+  });
+});
+
 test.describe("画线前的价格预览", () => {
   test("选了水平线后，鼠标所在位置显示虚线和价格，点下去的线就在这个价格", async ({ page }) => {
     await open(page);
