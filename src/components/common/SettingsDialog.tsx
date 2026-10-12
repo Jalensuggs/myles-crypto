@@ -1,5 +1,18 @@
-import { useState } from "react";
-import { MAX_MA_LINES, MAX_MA_PERIOD, MA_PRESETS, MIN_MA_PERIOD, parseMaPeriods } from "@/features/indicators/config";
+import {
+  MAX_EMA_LINES,
+  MAX_MA_LINES,
+  MAX_MA_PERIOD,
+  MAX_VOL_MA_LINES,
+  MA_PRESETS,
+  MIN_MA_PERIOD,
+  parseBoll,
+  parseEmaPeriods,
+  parseKdj,
+  parseMaPeriods,
+  parseMacd,
+  parseRsiPeriod,
+  parseVolMaPeriods,
+} from "@/features/indicators/config";
 import { clearAllStored } from "@/lib/storage";
 import { useDrawingsStore } from "@/stores/drawings.store";
 import { useFeedStore } from "@/stores/feed.store";
@@ -8,6 +21,7 @@ import { useUiStore } from "@/stores/ui.store";
 import { useWatchlistStore } from "@/stores/watchlist.store";
 import { useWorkspaceStore } from "@/stores/workspace.store";
 import { Dialog } from "./Dialog";
+import { ParamField } from "./ParamField";
 
 function clamp(value: number, min: number, max: number, fallback: number): number {
   if (!Number.isFinite(value)) return fallback;
@@ -23,16 +37,13 @@ export function SettingsDialog() {
   const moveThresholdPct = usePreferencesStore((s) => s.moveThresholdPct);
   const update = usePreferencesStore((s) => s.update);
   const maPeriods = usePreferencesStore((s) => s.maPeriods);
-  // 边输入边生效：内容合法就立刻应用到图表，不需要再按回车或点别处；
-  // 不合法时保留上一次的设置，并在输入框下面提示。
-  const [maDraft, setMaDraft] = useState<string | null>(null);
-  const maInvalid = maDraft !== null && parseMaPeriods(maDraft) === null;
-
-  const onMaChange = (text: string) => {
-    setMaDraft(text);
-    const parsed = parseMaPeriods(text);
-    if (parsed) update({ maPeriods: parsed });
-  };
+  const emaPeriods = usePreferencesStore((s) => s.emaPeriods);
+  const volMaPeriods = usePreferencesStore((s) => s.volMaPeriods);
+  const bollParams = usePreferencesStore((s) => s.bollParams);
+  const macdParams = usePreferencesStore((s) => s.macdParams);
+  const kdjParams = usePreferencesStore((s) => s.kdjParams);
+  const rsiPeriod = usePreferencesStore((s) => s.rsiPeriod);
+  const periodRule = `${MIN_MA_PERIOD}–${MAX_MA_PERIOD} 的整数，用逗号分隔`;
 
   const resetEverything = () => {
     if (!window.confirm("确定要清空本机保存的标签、布局、自选、绘图、异动记录和设置吗？此操作无法撤销。")) return;
@@ -105,51 +116,93 @@ export function SettingsDialog() {
         </span>
       </label>
 
-      <div className="field">
-        <span className="field__label">
-          均线周期
-          {maInvalid ? (
-            <span className="field__hint field__hint--error" data-testid="ma-periods-error" role="alert">
-              格式不对，暂未生效。请填 1 到 {MAX_MA_LINES} 个 {MIN_MA_PERIOD}–{MAX_MA_PERIOD} 的整数，用逗号分隔
-            </span>
-          ) : (
-            <span className="field__hint">
-              最多 {MAX_MA_LINES} 条，用逗号分隔，改完立即生效。数字是当前周期的 K 线根数，不是天数
-            </span>
-          )}
-          <span className="field__presets">
-            {MA_PRESETS.map((preset) => (
-              <button
-                key={preset.label}
-                type="button"
-                className="chip"
-                aria-pressed={preset.periods.join() === maPeriods.join()}
-                title={preset.periods.join(" / ")}
-                onClick={() => {
-                  update({ maPeriods: preset.periods });
-                  setMaDraft(null);
-                }}
-              >
-                {preset.label}
-              </button>
-            ))}
-          </span>
+      <h3 className="dialog__section">指标参数</h3>
+
+      <ParamField
+        label="MA 均线周期"
+        hint={`最多 ${MAX_MA_LINES} 条，用逗号分隔，改完立即生效。数字是当前周期的 K 线根数，不是天数`}
+        errorHint={`请填 1 到 ${MAX_MA_LINES} 个 ${periodRule}`}
+        value={maPeriods.join(", ")}
+        parse={parseMaPeriods}
+        onValid={(v) => update({ maPeriods: v })}
+        testId="ma-periods"
+        width={190}
+      >
+        <span className="field__presets">
+          {MA_PRESETS.map((preset) => (
+            <button
+              key={preset.label}
+              type="button"
+              className="chip"
+              aria-pressed={preset.periods.join() === maPeriods.join()}
+              title={preset.periods.join(" / ")}
+              onClick={() => update({ maPeriods: preset.periods })}
+            >
+              {preset.label}
+            </button>
+          ))}
         </span>
-        <span className="field__control">
-          <input
-            className="input"
-            type="text"
-            inputMode="numeric"
-            aria-label="均线周期"
-            aria-invalid={maInvalid}
-            data-testid="ma-periods"
-            style={{ width: 190 }}
-            value={maDraft ?? maPeriods.join(", ")}
-            onChange={(e) => onMaChange(e.target.value)}
-            onBlur={() => setMaDraft(null)}
-          />
-        </span>
-      </div>
+      </ParamField>
+
+      <ParamField
+        label="EMA 周期"
+        hint={`最多 ${MAX_EMA_LINES} 条`}
+        errorHint={`请填 1 到 ${MAX_EMA_LINES} 个 ${periodRule}`}
+        value={emaPeriods.join(", ")}
+        parse={parseEmaPeriods}
+        onValid={(v) => update({ emaPeriods: v })}
+        testId="ema-periods"
+      />
+
+      <ParamField
+        label="布林带"
+        hint="周期, 标准差倍数"
+        errorHint="请填两个数，例如 20, 2。周期 2–500，倍数 0.1–10"
+        value={bollParams.join(", ")}
+        parse={parseBoll}
+        onValid={(v) => update({ bollParams: v })}
+        testId="boll-params"
+      />
+
+      <ParamField
+        label="成交量均线周期"
+        hint={`最多 ${MAX_VOL_MA_LINES} 条`}
+        errorHint={`请填 1 到 ${MAX_VOL_MA_LINES} 个 ${periodRule}`}
+        value={volMaPeriods.join(", ")}
+        parse={parseVolMaPeriods}
+        onValid={(v) => update({ volMaPeriods: v })}
+        testId="volma-periods"
+      />
+
+      <ParamField
+        label="MACD"
+        hint="快线, 慢线, 信号线"
+        errorHint="请填三个整数，例如 12, 26, 9。快线要小于慢线"
+        value={macdParams.join(", ")}
+        parse={parseMacd}
+        onValid={(v) => update({ macdParams: v })}
+        testId="macd-params"
+      />
+
+      <ParamField
+        label="KDJ"
+        hint="周期, K 平滑, D 平滑"
+        errorHint="请填三个整数，例如 9, 3, 3"
+        value={kdjParams.join(", ")}
+        parse={parseKdj}
+        onValid={(v) => update({ kdjParams: v })}
+        testId="kdj-params"
+      />
+
+      <ParamField
+        label="RSI 周期"
+        hint="常用 6、12、14、24"
+        errorHint="请填一个 2–200 的整数"
+        value={String(rsiPeriod)}
+        parse={parseRsiPeriod}
+        onValid={(v) => update({ rsiPeriod: v })}
+        testId="rsi-period"
+      />
 
       <div className="dialog__foot">
         <button type="button" className="btn btn--ghost" onClick={resetEverything}>

@@ -95,3 +95,57 @@ function toRsi(avgGain: number, avgLoss: number): number {
   if (avgLoss === 0) return avgGain === 0 ? 50 : 100;
   return 100 - 100 / (1 + avgGain / avgLoss);
 }
+
+export interface BollPoint {
+  upper: number | null;
+  mid: number | null;
+  lower: number | null;
+}
+
+/** 布林带：中轨是 MA，上下轨是中轨加减若干倍标准差（总体标准差） */
+export function boll(closes: readonly number[], period = 20, multiplier = 2): BollPoint[] {
+  const mid = sma(closes, period);
+  return closes.map((_, i) => {
+    const m = mid[i];
+    if (m === null || m === undefined) return { upper: null, mid: null, lower: null };
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += (closes[j]! - m) ** 2;
+    const deviation = Math.sqrt(sum / period) * multiplier;
+    return { upper: m + deviation, mid: m, lower: m - deviation };
+  });
+}
+
+export interface KdjPoint {
+  k: number | null;
+  d: number | null;
+  j: number | null;
+}
+
+/**
+ * KDJ 随机指标。先算 RSV =（收盘 − N 日最低）/（N 日最高 − N 日最低）× 100，
+ * K 是 RSV 的平滑，D 是 K 的平滑，J = 3K − 2D。K、D 的初值取 50。
+ */
+export function kdj(
+  bars: readonly { high: number; low: number; close: number }[],
+  period = 9,
+  kSmooth = 3,
+  dSmooth = 3,
+): KdjPoint[] {
+  const out: KdjPoint[] = bars.map(() => ({ k: null, d: null, j: null }));
+  let k = 50;
+  let d = 50;
+  for (let i = period - 1; i < bars.length; i++) {
+    let highest = -Infinity;
+    let lowest = Infinity;
+    for (let j = i - period + 1; j <= i; j++) {
+      if (bars[j]!.high > highest) highest = bars[j]!.high;
+      if (bars[j]!.low < lowest) lowest = bars[j]!.low;
+    }
+    // 这段时间价格完全没动时 RSV 没有定义，取中间值
+    const rsv = highest === lowest ? 50 : ((bars[i]!.close - lowest) / (highest - lowest)) * 100;
+    k = ((kSmooth - 1) * k + rsv) / kSmooth;
+    d = ((dSmooth - 1) * d + k) / dSmooth;
+    out[i] = { k, d, j: 3 * k - 2 * d };
+  }
+  return out;
+}

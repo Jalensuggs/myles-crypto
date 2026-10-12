@@ -350,6 +350,11 @@ input {
 .menu__list--wide {
   width: 280px;
 }
+.menu__group {
+  padding: 6px 8px 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
 .menu__box {
   display: grid;
   place-items: center;
@@ -360,7 +365,12 @@ input {
   color: #fff;
   flex: 0 0 auto;
 }
-.menu__item[aria-checked="true"] .menu__box {
+.menu__item[aria-checked="true"] .menu__group {
+  padding: 6px 8px 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.menu__box {
   background: var(--accent);
   border-color: var(--accent);
 }
@@ -1096,6 +1106,14 @@ dialog.dialog::backdrop {
   margin-top: 2px;
   color: var(--text-muted);
   font-size: 12px;
+}
+.dialog__section {
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-strong);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
 }
 .field__presets {
   display: flex;

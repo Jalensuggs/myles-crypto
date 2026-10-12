@@ -6,31 +6,67 @@ import {
   type ISeriesApi,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { macd, rsi, sma, type MacdPoint } from "@/features/indicators/calc";
+import { boll, ema, kdj, macd, rsi, sma } from "@/features/indicators/calc";
 import {
+  BOLL_COLORS,
+  EMA_COLORS,
+  KDJ_COLORS,
+  KDJ_OVERBOUGHT,
+  KDJ_OVERSOLD,
   MACD_DEA_COLOR,
   MACD_DIF_COLOR,
-  MACD_PARAMS,
   MA_COLORS,
   RSI_COLOR,
   RSI_OVERBOUGHT,
   RSI_OVERSOLD,
-  RSI_PERIOD,
+  VOL_MA_COLORS,
   type IndicatorConfig,
 } from "@/features/indicators/config";
 import type { TrendColors } from "@/stores/preferences.store";
 import type { Candle } from "@/types/market";
 
-type Line = ISeriesApi<"Line">;
+type AnySeries = ISeriesApi<"Line"> | ISeriesApi<"Histogram">;
 
-/** 某一根 K 线上各指标的数值，用于图例显示。没开启的指标对应字段为 undefined。 */
+/** 指标画在哪里：主图、成交量的刻度上，或各自的副图 */
+export type SubPaneId = "macd" | "kdj" | "rsi";
+type Place = "main" | "volume" | SubPaneId;
+
+interface Spec {
+  /** 唯一标识，例如 ma:7、boll:upper、macd:dif */
+  key: string;
+  place: Place;
+  kind: "line" | "histogram";
+  label: string;
+  color: string;
+}
+
+export interface IndicatorItem {
+  /** 用于测试定位，例如 ma-7、ema-12 */
+  id: string;
+  label: string;
+  color: string;
+  value: number | null;
+  /** 数值代表涨跌方向时（MACD 的柱子），按正负着色而不是用固定颜色 */
+  signed?: boolean;
+}
+
+export interface IndicatorPaneValues {
+  id: SubPaneId;
+  title: string;
+  /** 这个副图里的数值显示几位小数 */
+  digits: number;
+  items: IndicatorItem[];
+}
+
+/** 某一根 K 线上各指标的数值，用于图例显示 */
 export interface IndicatorValues {
-  ma: { period: number; color: string; value: number | null }[];
-  macd?: MacdPoint;
-  rsi?: number | null;
+  main: IndicatorItem[];
+  volume: IndicatorItem[];
+  panes: IndicatorPaneValues[];
 }
 
 const MAIN_PANE_STRETCH = 3;
+const EMPTY_CONFIG: IndicatorConfig = { ma: [], ema: [], boll: null, volMa: [], macd: null, kdj: null, rsi: null };
 
 function priceFormat(precision: number) {
   return { type: "price" as const, precision, minMove: 1 / 10 ** precision };
@@ -41,195 +77,146 @@ function alpha(hex: string, a: number): string {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
 }
 
+const pick = <T>(colors: readonly T[], i: number): T => colors[i % colors.length]!;
+
+/** 配置对应要画哪些线。顺序决定了创建顺序：副图里柱子先于线，这样线压在柱子上面。 */
+function specsOf(config: IndicatorConfig): Spec[] {
+  const specs: Spec[] = [];
+  config.ma.forEach((p, i) =>
+    specs.push({ key: `ma:${p}`, place: "main", kind: "line", label: `MA${p}`, color: pick(MA_COLORS, i) }),
+  );
+  config.ema.forEach((p, i) =>
+    specs.push({ key: `ema:${p}`, place: "main", kind: "line", label: `EMA${p}`, color: pick(EMA_COLORS, i) }),
+  );
+  if (config.boll) {
+    specs.push({ key: "boll:upper", place: "main", kind: "line", label: "上轨", color: BOLL_COLORS.upper });
+    specs.push({ key: "boll:mid", place: "main", kind: "line", label: "中轨", color: BOLL_COLORS.mid });
+    specs.push({ key: "boll:lower", place: "main", kind: "line", label: "下轨", color: BOLL_COLORS.lower });
+  }
+  config.volMa.forEach((p, i) =>
+    specs.push({ key: `volma:${p}`, place: "volume", kind: "line", label: `量MA${p}`, color: pick(VOL_MA_COLORS, i) }),
+  );
+  if (config.macd) {
+    specs.push({ key: "macd:hist", place: "macd", kind: "histogram", label: "MACD", color: "#8b929d" });
+    specs.push({ key: "macd:dif", place: "macd", kind: "line", label: "DIF", color: MACD_DIF_COLOR });
+    specs.push({ key: "macd:dea", place: "macd", kind: "line", label: "DEA", color: MACD_DEA_COLOR });
+  }
+  if (config.kdj) {
+    specs.push({ key: "kdj:k", place: "kdj", kind: "line", label: "K", color: KDJ_COLORS.k });
+    specs.push({ key: "kdj:d", place: "kdj", kind: "line", label: "D", color: KDJ_COLORS.d });
+    specs.push({ key: "kdj:j", place: "kdj", kind: "line", label: "J", color: KDJ_COLORS.j });
+  }
+  if (config.rsi !== null) {
+    specs.push({ key: "rsi", place: "rsi", kind: "line", label: "RSI", color: RSI_COLOR });
+  }
+  return specs;
+}
+
 /**
- * 管理一张图表上的技术指标：均线叠加在主图上，MACD 和 RSI 各占一个副图。
- * 只负责序列的创建、销毁和数据写入，计算本身在 features/indicators/calc.ts。
+ * 管理一张图表上的技术指标：均线、EMA、布林带叠加在主图上，成交量均线画在成交量上，
+ * MACD、KDJ、RSI 各占一个副图。只负责序列的创建、销毁和数据写入，
+ * 计算本身在 features/indicators/calc.ts。
  */
 export class IndicatorLayer {
-  private config: IndicatorConfig = { ma: [], macd: false, rsi: false };
+  private config: IndicatorConfig = EMPTY_CONFIG;
+  private specs: Spec[] = [];
   private colors: TrendColors = { up: "#2edb83", down: "#ff526b" };
-
-  private readonly maLines = new Map<number, Line>();
-  private macdSeries: { hist: ISeriesApi<"Histogram">; dif: Line; dea: Line } | null = null;
-  private rsiLine: Line | null = null;
-
-  private maData = new Map<number, (number | null)[]>();
-  private macdData: MacdPoint[] = [];
-  private rsiData: (number | null)[] = [];
+  private precision = 2;
+  private readonly series = new Map<string, AnySeries>();
+  private data = new Map<string, (number | null)[]>();
 
   constructor(private readonly chart: IChartApi) {}
 
   /** 按配置增删序列。调用后需要再调用 setData 填入数据。 */
   configure(config: IndicatorConfig, colors: TrendColors, precision: number): void {
     this.colors = colors;
-    const format = priceFormat(precision);
+    this.precision = precision;
+    const specs = specsOf(config);
+    const wanted = new Set(specs.map((s) => s.key));
 
-    for (const [period, line] of [...this.maLines]) {
-      if (!config.ma.includes(period)) {
-        this.maLines.delete(period);
-        this.chart.removeSeries(line);
-      }
+    for (const [key, series] of [...this.series]) {
+      if (wanted.has(key)) continue;
+      // 先从表里删掉再移除：移除过程中图表会触发重绘回调，那时不能再访问正在移除的序列
+      this.series.delete(key);
+      this.chart.removeSeries(series);
     }
-    config.ma.forEach((period, i) => {
-      const color = MA_COLORS[i % MA_COLORS.length]!;
-      const existing = this.maLines.get(period);
+
+    for (const spec of specs) {
+      const existing = this.series.get(spec.key);
       if (existing) {
-        existing.applyOptions({ color, priceFormat: format });
-        return;
+        existing.applyOptions({ color: spec.color, priceFormat: this.formatOf(spec.place) });
+        continue;
       }
-      this.maLines.set(
-        period,
-        this.chart.addSeries(
-          LineSeries,
-          {
-            color,
-            lineWidth: 1,
-            priceLineVisible: false,
-            lastValueVisible: false,
-            crosshairMarkerVisible: false,
-            priceFormat: format,
-          },
-          0,
-        ),
-      );
-    });
-
-    // 小数位比价格多一位，低价币的 MACD 数值很小
-    const macdFormat = priceFormat(Math.min(8, precision + 1));
-    if (config.macd && !this.macdSeries) {
-      const pane = this.chart.panes().length;
-      const common = { priceLineVisible: false, lastValueVisible: false, priceFormat: macdFormat };
-      const hist = this.chart.addSeries(HistogramSeries, common, pane);
-      const lineOptions = { ...common, lineWidth: 1 as const, crosshairMarkerVisible: false };
-      this.macdSeries = {
-        hist,
-        dif: this.chart.addSeries(LineSeries, { ...lineOptions, color: MACD_DIF_COLOR }, pane),
-        dea: this.chart.addSeries(LineSeries, { ...lineOptions, color: MACD_DEA_COLOR }, pane),
-      };
-    } else if (!config.macd && this.macdSeries) {
-      // 先清掉引用再移除：移除过程中图表会触发重绘回调，那时不能再访问正在移除的序列
-      const removing = Object.values(this.macdSeries);
-      this.macdSeries = null;
-      for (const series of removing) this.chart.removeSeries(series);
-    } else if (this.macdSeries) {
-      for (const series of Object.values(this.macdSeries)) series.applyOptions({ priceFormat: macdFormat });
+      this.series.set(spec.key, this.create(spec));
     }
 
-    if (config.rsi && !this.rsiLine) {
-      const line = this.chart.addSeries(
-        LineSeries,
-        {
-          color: RSI_COLOR,
-          lineWidth: 1,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
-          priceFormat: priceFormat(1),
-          // 纵轴固定为 0 到 100，方便对照超买超卖线
-          autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }),
-        },
-        this.chart.panes().length,
-      );
-      for (const price of [RSI_OVERBOUGHT, RSI_OVERSOLD]) {
-        line.createPriceLine({
-          price,
-          color: "#5e6672",
-          lineWidth: 1,
-          lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: "",
-        });
-      }
-      this.rsiLine = line;
-    } else if (!config.rsi && this.rsiLine) {
-      const removing = this.rsiLine;
-      this.rsiLine = null;
-      this.chart.removeSeries(removing);
-    }
-
-    this.config = { ma: [...config.ma], macd: config.macd, rsi: config.rsi };
+    this.config = config;
+    this.specs = specs;
     this.balancePanes();
   }
 
   /** 重新计算并写入全部数据 */
   setData(candles: readonly Candle[], offset: number): void {
     this.compute(candles);
-    const time = (i: number) => (candles[i]!.time + offset) as UTCTimestamp;
-
-    for (const [period, line] of this.maLines) {
-      const values = this.maData.get(period) ?? [];
-      const data: { time: UTCTimestamp; value: number }[] = [];
+    for (const spec of this.specs) {
+      const series = this.series.get(spec.key);
+      const values = this.data.get(spec.key);
+      if (!series || !values) continue;
+      const points: { time: UTCTimestamp; value: number; color?: string }[] = [];
       for (let i = 0; i < values.length; i++) {
         const value = values[i];
-        if (value !== null && value !== undefined) data.push({ time: time(i), value });
+        if (value === null || value === undefined) continue;
+        points.push(this.point(spec, (candles[i]!.time + offset) as UTCTimestamp, value));
       }
-      line.setData(data);
-    }
-
-    if (this.macdSeries) {
-      const hist: { time: UTCTimestamp; value: number; color: string }[] = [];
-      const dif: { time: UTCTimestamp; value: number }[] = [];
-      const dea: { time: UTCTimestamp; value: number }[] = [];
-      for (let i = 0; i < this.macdData.length; i++) {
-        const p = this.macdData[i]!;
-        if (p.dif !== null) dif.push({ time: time(i), value: p.dif });
-        if (p.dea !== null) dea.push({ time: time(i), value: p.dea });
-        if (p.hist !== null) hist.push({ time: time(i), value: p.hist, color: this.histColor(p.hist) });
-      }
-      this.macdSeries.hist.setData(hist);
-      this.macdSeries.dif.setData(dif);
-      this.macdSeries.dea.setData(dea);
-    }
-
-    if (this.rsiLine) {
-      const data: { time: UTCTimestamp; value: number }[] = [];
-      for (let i = 0; i < this.rsiData.length; i++) {
-        const value = this.rsiData[i];
-        if (value !== null && value !== undefined) data.push({ time: time(i), value });
-      }
-      this.rsiLine.setData(data);
+      series.setData(points);
     }
   }
 
   /** 实时更新：重新计算后只把最后 count 根 K 线对应的点写进图表 */
   updateTail(candles: readonly Candle[], offset: number, count: number): void {
-    if (!this.hasAny() || candles.length === 0) return;
+    if (this.series.size === 0 || candles.length === 0) return;
     this.compute(candles);
     const from = Math.max(0, candles.length - Math.max(1, count));
     for (let i = from; i < candles.length; i++) {
       const time = (candles[i]!.time + offset) as UTCTimestamp;
-      for (const [period, line] of this.maLines) {
-        const value = this.maData.get(period)?.[i];
-        if (value !== null && value !== undefined) line.update({ time, value });
-      }
-      if (this.macdSeries) {
-        const p = this.macdData[i];
-        if (p && p.dif !== null) this.macdSeries.dif.update({ time, value: p.dif });
-        if (p && p.dea !== null) this.macdSeries.dea.update({ time, value: p.dea });
-        if (p && p.hist !== null) this.macdSeries.hist.update({ time, value: p.hist, color: this.histColor(p.hist) });
-      }
-      if (this.rsiLine) {
-        const value = this.rsiData[i];
-        if (value !== null && value !== undefined) this.rsiLine.update({ time, value });
+      for (const spec of this.specs) {
+        const value = this.data.get(spec.key)?.[i];
+        if (value === null || value === undefined) continue;
+        this.series.get(spec.key)?.update(this.point(spec, time, value));
       }
     }
   }
 
   valuesAt(index: number): IndicatorValues {
-    return {
-      ma: this.config.ma.map((period, i) => ({
-        period,
-        color: MA_COLORS[i % MA_COLORS.length]!,
-        value: this.maData.get(period)?.[index] ?? null,
-      })),
-      macd: this.config.macd ? (this.macdData[index] ?? { dif: null, dea: null, hist: null }) : undefined,
-      rsi: this.config.rsi ? (this.rsiData[index] ?? null) : undefined,
-    };
+    const item = (spec: Spec): IndicatorItem => ({
+      id: spec.key.replace(":", "-"),
+      label: spec.label,
+      color: spec.color,
+      value: this.data.get(spec.key)?.[index] ?? null,
+      signed: spec.kind === "histogram",
+    });
+    const at = (place: Place) => this.specs.filter((s) => s.place === place).map(item);
+    const panes: IndicatorPaneValues[] = [];
+    const { macd: m, kdj: k, rsi: r } = this.config;
+    if (m) {
+      // 柱子放在最后显示，和常见软件的顺序一致：DIF、DEA、MACD
+      const items = at("macd");
+      panes.push({
+        id: "macd",
+        title: `MACD(${m.fast},${m.slow},${m.signal})`,
+        digits: Math.min(8, this.precision + 1),
+        items: [...items.slice(1), items[0]!],
+      });
+    }
+    if (k) panes.push({ id: "kdj", title: `KDJ(${k.period},${k.k},${k.d})`, digits: 2, items: at("kdj") });
+    if (r !== null) panes.push({ id: "rsi", title: `RSI(${r})`, digits: 2, items: at("rsi") });
+    return { main: at("main"), volume: at("volume"), panes };
   }
 
   /** 副图在页面里对应的元素，用来给副图的文字标签定位 */
-  paneElement(kind: "macd" | "rsi"): HTMLElement | null {
-    const series = kind === "macd" ? this.macdSeries?.dif : this.rsiLine;
+  paneElement(id: SubPaneId): HTMLElement | null {
+    const spec = this.specs.find((s) => s.place === id);
+    const series = spec ? this.series.get(spec.key) : undefined;
     if (!series) return null;
     try {
       return series.getPane().getHTMLElement();
@@ -239,19 +226,94 @@ export class IndicatorLayer {
     }
   }
 
-  private hasAny(): boolean {
-    return this.maLines.size > 0 || this.macdSeries !== null || this.rsiLine !== null;
+  private formatOf(place: Place) {
+    if (place === "volume") return { type: "volume" as const };
+    if (place === "main") return priceFormat(this.precision);
+    // 小数位比价格多一位，低价币的 MACD 数值很小
+    if (place === "macd") return priceFormat(Math.min(8, this.precision + 1));
+    return priceFormat(2);
+  }
+
+  /** 副图已经存在就加进去，否则在最下面新开一个 */
+  private paneIndexOf(place: Place): number {
+    if (place === "main" || place === "volume") return 0;
+    for (const [key, series] of this.series) {
+      if (key.startsWith(`${place}:`) || key === place) return series.getPane().paneIndex();
+    }
+    return this.chart.panes().length;
+  }
+
+  private create(spec: Spec): AnySeries {
+    const pane = this.paneIndexOf(spec.place);
+    const common = {
+      priceLineVisible: false,
+      lastValueVisible: false,
+      priceFormat: this.formatOf(spec.place),
+      ...(spec.place === "volume" ? { priceScaleId: "volume" } : {}),
+    };
+    if (spec.kind === "histogram") return this.chart.addSeries(HistogramSeries, common, pane);
+
+    const line = this.chart.addSeries(
+      LineSeries,
+      {
+        ...common,
+        color: spec.color,
+        lineWidth: 1,
+        crosshairMarkerVisible: false,
+        // RSI 的纵轴固定为 0 到 100，方便对照超买超卖线
+        ...(spec.place === "rsi" ? { autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }) } : {}),
+      },
+      pane,
+    );
+    const guides = spec.key === "rsi" ? [RSI_OVERBOUGHT, RSI_OVERSOLD] : spec.key === "kdj:k" ? [KDJ_OVERBOUGHT, KDJ_OVERSOLD] : [];
+    for (const price of guides) {
+      line.createPriceLine({
+        price,
+        color: "#5e6672",
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: "",
+      });
+    }
+    return line;
+  }
+
+  private point(spec: Spec, time: UTCTimestamp, value: number) {
+    if (spec.kind !== "histogram") return { time, value };
+    return { time, value, color: alpha(value >= 0 ? this.colors.up : this.colors.down, 0.7) };
   }
 
   private compute(candles: readonly Candle[]): void {
+    const { ma, ema: emaPeriods, boll: b, volMa, macd: m, kdj: k, rsi: r } = this.config;
     const closes = candles.map((c) => c.close);
-    this.maData = new Map(this.config.ma.map((period) => [period, sma(closes, period)]));
-    this.macdData = this.config.macd ? macd(closes, MACD_PARAMS.fast, MACD_PARAMS.slow, MACD_PARAMS.signal) : [];
-    this.rsiData = this.config.rsi ? rsi(closes, RSI_PERIOD) : [];
-  }
-
-  private histColor(value: number): string {
-    return alpha(value >= 0 ? this.colors.up : this.colors.down, 0.7);
+    const data = new Map<string, (number | null)[]>();
+    for (const p of ma) data.set(`ma:${p}`, sma(closes, p));
+    for (const p of emaPeriods) data.set(`ema:${p}`, ema(closes, p));
+    if (b) {
+      const bands = boll(closes, b.period, b.multiplier);
+      data.set("boll:upper", bands.map((x) => x.upper));
+      data.set("boll:mid", bands.map((x) => x.mid));
+      data.set("boll:lower", bands.map((x) => x.lower));
+    }
+    if (volMa.length > 0) {
+      const volumes = candles.map((c) => c.volume);
+      for (const p of volMa) data.set(`volma:${p}`, sma(volumes, p));
+    }
+    if (m) {
+      const points = macd(closes, m.fast, m.slow, m.signal);
+      data.set("macd:hist", points.map((x) => x.hist));
+      data.set("macd:dif", points.map((x) => x.dif));
+      data.set("macd:dea", points.map((x) => x.dea));
+    }
+    if (k) {
+      const points = kdj(candles, k.period, k.k, k.d);
+      data.set("kdj:k", points.map((x) => x.k));
+      data.set("kdj:d", points.map((x) => x.d));
+      data.set("kdj:j", points.map((x) => x.j));
+    }
+    if (r !== null) data.set("rsi", rsi(closes, r));
+    this.data = data;
   }
 
   /** 有副图时让主图占更大的比例 */

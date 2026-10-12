@@ -1061,6 +1061,99 @@ test.describe("技术指标", () => {
   });
 });
 
+test.describe("更多指标", () => {
+  const ids = ["legend-ema-12", "legend-boll-upper", "legend-volma-5"];
+
+  test("EMA、布林带、成交量均线和 KDJ 默认都不开", async ({ page }) => {
+    await open(page);
+    for (const id of ids) await expect(page.getByTestId(id)).toHaveCount(0);
+    await expect(page.getByTestId("indicator-label-kdj")).toHaveCount(0);
+    await page.getByTestId("indicator-button").click();
+    for (const id of ["ema", "boll", "volma", "kdj", "macd", "rsi"]) {
+      await expect(page.getByTestId(`indicator-${id}`)).toHaveAttribute("aria-checked", "false");
+    }
+    await expect(page.getByTestId("indicator-ma")).toHaveAttribute("aria-checked", "true");
+  });
+
+  test("逐个开启后图例和副图里出现对应的数值，刷新后保留", async ({ page }) => {
+    await open(page);
+    await page.getByTestId("indicator-button").click();
+    for (const id of ["ema", "boll", "volma", "kdj"]) await page.getByTestId(`indicator-${id}`).click();
+    await page.keyboard.press("Escape");
+
+    await expect(page.getByTestId("legend-ema-12")).toHaveText(/^EMA12 [\d,.]+$/);
+    await expect(page.getByTestId("legend-ema-26")).toHaveText(/^EMA26 [\d,.]+$/);
+    await expect(page.getByTestId("legend-boll-upper")).toHaveText(/^上轨 [\d,.]+$/);
+    await expect(page.getByTestId("legend-boll-mid")).toHaveText(/^中轨 [\d,.]+$/);
+    await expect(page.getByTestId("legend-boll-lower")).toHaveText(/^下轨 [\d,.]+$/);
+    await expect(page.getByTestId("legend-volma-5")).toHaveText(/^量MA5 [\d,.万亿]+$/);
+    await expect(page.getByTestId("legend-volma-10")).toHaveText(/^量MA10 [\d,.万亿]+$/);
+    const kdj = page.getByTestId("indicator-label-kdj");
+    await expect(kdj).toContainText("KDJ(9,3,3)");
+    await expect(kdj).toHaveText(/K -?[\d,.]+/);
+    await expect(kdj).toHaveText(/J -?[\d,.]+/);
+    await expect(page.getByTestId("indicator-button")).toContainText("5");
+
+    // 上轨高于中轨，中轨高于下轨
+    const num = async (id: string) => Number(((await page.getByTestId(id).textContent()) ?? "").split(" ")[1]!.replace(/,/g, ""));
+    expect(await num("legend-boll-upper")).toBeGreaterThan(await num("legend-boll-mid"));
+    expect(await num("legend-boll-mid")).toBeGreaterThan(await num("legend-boll-lower"));
+
+    await page.reload();
+    await expect(page.getByTestId("pane-0")).toHaveAttribute("data-phase", "ready");
+    await expect(page.getByTestId("legend-ema-12")).toBeVisible();
+    await expect(page.getByTestId("indicator-label-kdj")).toBeVisible();
+
+    // 逐个关掉，图表仍然正常
+    await page.getByTestId("indicator-button").click();
+    for (const id of ["ema", "boll", "volma", "kdj"]) await page.getByTestId(`indicator-${id}`).click();
+    for (const id of ids) await expect(page.getByTestId(id)).toHaveCount(0);
+    await expect(page.getByTestId("indicator-label-kdj")).toHaveCount(0);
+    await expect(page.getByTestId("legend-ma-7")).toBeVisible();
+  });
+
+  test("MACD、RSI、KDJ 和布林带的参数可以在设置里改，立即生效", async ({ page }) => {
+    await open(page);
+    await page.getByTestId("indicator-button").click();
+    for (const id of ["macd", "rsi", "kdj", "boll", "ema"]) await page.getByTestId(`indicator-${id}`).click();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("indicator-label-macd")).toContainText("MACD(12,26,9)");
+    await expect(page.getByTestId("indicator-label-rsi")).toContainText("RSI(14)");
+
+    await page.getByTestId("settings-button").click();
+    const dialog = page.getByTestId("settings-dialog");
+    await dialog.getByTestId("macd-params").fill("5, 10, 3");
+    await expect(page.getByTestId("indicator-label-macd")).toContainText("MACD(5,10,3)");
+    await expect(page.getByTestId("indicator-label-macd")).toHaveText(/DIF -?[\d,.]+/);
+
+    // 快线不能大于慢线：提示出错，图上保持原来的参数
+    await dialog.getByTestId("macd-params").fill("30, 10, 3");
+    await expect(dialog.getByTestId("macd-params-error")).toContainText("暂未生效");
+    await expect(page.getByTestId("indicator-label-macd")).toContainText("MACD(5,10,3)");
+
+    await dialog.getByTestId("rsi-period").fill("6");
+    await expect(page.getByTestId("indicator-label-rsi")).toContainText("RSI(6)");
+    await dialog.getByTestId("kdj-params").fill("14, 3, 3");
+    await expect(page.getByTestId("indicator-label-kdj")).toContainText("KDJ(14,3,3)");
+    await dialog.getByTestId("ema-periods").fill("50");
+    await expect(page.getByTestId("legend-ema-50")).toHaveText(/^EMA50 [\d,.]+$/);
+    await expect(page.getByTestId("legend-ema-12")).toHaveCount(0);
+
+    const width = async () => {
+      const text = async (id: string) => Number(((await page.getByTestId(id).textContent()) ?? "").split(" ")[1]!.replace(/,/g, ""));
+      return (await text("legend-boll-upper")) - (await text("legend-boll-lower"));
+    };
+    const before = await width();
+    await dialog.getByTestId("boll-params").fill("20, 4");
+    await expect.poll(width).toBeGreaterThan(before * 1.5);
+
+    await dialog.getByRole("button", { name: "完成" }).click();
+    await page.reload();
+    await expect(page.getByTestId("indicator-label-macd")).toContainText("MACD(5,10,3)");
+    await expect(page.getByTestId("indicator-label-rsi")).toContainText("RSI(6)");
+  });
+});
+
 test.describe("本地数据损坏", () => {
   test("某一条记录损坏时只重置那一条", async ({ page }) => {
     await page.addInitScript(() => {

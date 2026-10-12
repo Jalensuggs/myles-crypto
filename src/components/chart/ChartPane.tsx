@@ -17,7 +17,6 @@ import { KLINE_PAGE_SIZE } from "@/data/binance/endpoints";
 import { describeError } from "@/data/binance/provider";
 import { loadLatest, loadOlder, type LoaderOptions, type PageFetcher } from "@/data/candle-loader";
 import { mergeCandle, mergeCandleLists } from "@/data/candles";
-import type { IndicatorConfig } from "@/features/indicators/config";
 import {
   aggregateLast,
   aggregateSession,
@@ -28,6 +27,7 @@ import {
 import { matchesContract, mergeOfficial } from "@/features/session/official";
 import { isUsRegularSession } from "@/features/session/us-session";
 import { useDrawingsStore } from "@/stores/drawings.store";
+import { useIndicatorConfig } from "@/stores/indicator-config";
 import { trendColors, usePreferencesStore, type TrendColors } from "@/stores/preferences.store";
 import { useTickersStore } from "@/stores/tickers.store";
 import { useWorkspaceStore } from "@/stores/workspace.store";
@@ -106,16 +106,9 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
   const upColor = usePreferencesStore((s) => s.upColor);
   const colors = useMemo(() => trendColors(upColor), [upColor]);
   const precision = useTickersStore((s) => s.precision[key]) ?? 2;
-  const maOn = usePreferencesStore((s) => s.indicatorMa);
-  const maPeriods = usePreferencesStore((s) => s.maPeriods);
-  const macdOn = usePreferencesStore((s) => s.indicatorMacd);
-  const rsiOn = usePreferencesStore((s) => s.indicatorRsi);
   const isStock = categoryOf(market) === "stock";
   const sessionOnly = usePreferencesStore((s) => s.stockSessionOnly) && isStock;
-  const indicatorConfig = useMemo<IndicatorConfig>(
-    () => ({ ma: maOn ? maPeriods : [], macd: macdOn, rsi: rsiOn }),
-    [maOn, maPeriods, macdOn, rsiOn],
-  );
+  const indicatorConfig = useIndicatorConfig();
 
   const containerRef = useRef<HTMLDivElement>(null);
   const legendRef = useRef<LegendHandle>(null);
@@ -636,7 +629,6 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
           bridge={bridge}
           layer={indicatorsRef}
           container={containerRef}
-          precision={precision}
         />
       )}
 

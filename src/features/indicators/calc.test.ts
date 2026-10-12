@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ema, macd, rsi, sma } from "./calc";
-import { parseMaPeriods } from "./config";
+import { boll, ema, kdj, macd, rsi, sma } from "./calc";
+import { parseBoll, parseEmaPeriods, parseKdj, parseMaPeriods, parseMacd, parseRsiPeriod, parseVolMaPeriods } from "./config";
 
 describe("sma", () => {
   it("数据不足的位置为 null，之后是窗口内的平均值", () => {
@@ -131,5 +131,128 @@ describe("parseMaPeriods", () => {
     expect(parseMaPeriods("-7")).toBeNull();
     expect(parseMaPeriods("1")).toBeNull();
     expect(parseMaPeriods("501")).toBeNull();
+  });
+});
+
+describe("boll", () => {
+  it("手算的小例子：周期 3、2 倍标准差", () => {
+    // 最后三个数 2、4、6：均值 4，总体标准差 sqrt((4+0+4)/3) = 1.63299
+    const out = boll([1, 2, 4, 6], 3, 2);
+    expect(out[0]).toEqual({ upper: null, mid: null, lower: null });
+    expect(out[1]!.mid).toBeNull();
+    expect(out[3]!.mid).toBe(4);
+    expect(out[3]!.upper).toBeCloseTo(4 + 2 * 1.632993, 5);
+    expect(out[3]!.lower).toBeCloseTo(4 - 2 * 1.632993, 5);
+  });
+
+  it("价格不变时三条线重合", () => {
+    const out = boll(new Array(30).fill(100));
+    expect(out[29]).toEqual({ upper: 100, mid: 100, lower: 100 });
+  });
+
+  it("中轨就是同周期的 MA，上下轨关于中轨对称", () => {
+    const closes = Array.from({ length: 60 }, (_, i) => 100 + Math.sin(i / 4) * 8);
+    const bands = boll(closes, 20, 2);
+    const ma = sma(closes, 20);
+    for (let i = 19; i < 60; i++) {
+      expect(bands[i]!.mid).toBeCloseTo(ma[i]!, 10);
+      expect(bands[i]!.upper! - bands[i]!.mid!).toBeCloseTo(bands[i]!.mid! - bands[i]!.lower!, 10);
+      expect(bands[i]!.upper!).toBeGreaterThan(bands[i]!.lower!);
+    }
+  });
+
+  it("倍数越大带越宽", () => {
+    const closes = Array.from({ length: 40 }, (_, i) => 100 + (i % 5));
+    const narrow = boll(closes, 20, 1)[39]!;
+    const wide = boll(closes, 20, 3)[39]!;
+    expect(wide.upper! - wide.lower!).toBeCloseTo((narrow.upper! - narrow.lower!) * 3, 8);
+  });
+});
+
+describe("kdj", () => {
+  const bar = (high: number, low: number, close: number) => ({ high, low, close });
+
+  it("手算的小例子：周期 3、平滑 3、3", () => {
+    // 第 3 根：最高 12 最低 8 收盘 11 → RSV 75；K = (2×50+75)/3 = 58.33；D = (2×50+58.33)/3 = 52.78；J = 3K−2D = 69.44
+    const out = kdj([bar(10, 8, 9), bar(11, 9, 10), bar(12, 10, 11)], 3, 3, 3);
+    expect(out[0]).toEqual({ k: null, d: null, j: null });
+    expect(out[1]!.k).toBeNull();
+    expect(out[2]!.k).toBeCloseTo(58.3333, 3);
+    expect(out[2]!.d).toBeCloseTo(52.7778, 3);
+    expect(out[2]!.j).toBeCloseTo(69.4444, 3);
+  });
+
+  it("一直收在最高点时 K、D 趋近 100，一直收在最低点时趋近 0", () => {
+    const up = Array.from({ length: 80 }, (_, i) => bar(100 + i, 99 + i, 100 + i));
+    const down = Array.from({ length: 80 }, (_, i) => bar(201 - i, 200 - i, 200 - i));
+    expect(kdj(up)[79]!.k!).toBeGreaterThan(99);
+    expect(kdj(up)[79]!.d!).toBeGreaterThan(99);
+    expect(kdj(down)[79]!.k!).toBeLessThan(1);
+  });
+
+  it("价格完全不动时停在 50", () => {
+    const flat = Array.from({ length: 20 }, () => bar(10, 10, 10));
+    expect(kdj(flat)[19]).toEqual({ k: 50, d: 50, j: 50 });
+  });
+
+  it("J 始终等于 3K − 2D，可以超出 0 到 100", () => {
+    const bars = Array.from({ length: 60 }, (_, i) => {
+      const c = 100 + Math.sin(i / 3) * 10;
+      return bar(c + 1, c - 1, c);
+    });
+    const out = kdj(bars);
+    let outside = false;
+    for (const p of out.slice(8)) {
+      expect(p.j!).toBeCloseTo(3 * p.k! - 2 * p.d!, 10);
+      if (p.j! > 100 || p.j! < 0) outside = true;
+    }
+    expect(outside).toBe(true);
+  });
+});
+
+describe("其他参数的解析", () => {
+  it("EMA 和成交量均线最多 4 条", () => {
+    expect(parseEmaPeriods("26, 12")).toEqual([12, 26]);
+    expect(parseEmaPeriods("5,10,20,30,60")).toBeNull();
+    expect(parseVolMaPeriods("5 10")).toEqual([5, 10]);
+    expect(parseVolMaPeriods("")).toBeNull();
+  });
+
+  it("MACD：三个整数，顺序保留，快线必须小于慢线", () => {
+    expect(parseMacd("12, 26, 9")).toEqual([12, 26, 9]);
+    expect(parseMacd("5，10，3")).toEqual([5, 10, 3]);
+    expect(parseMacd("26, 12, 9")).toBeNull();
+    expect(parseMacd("12, 12, 9")).toBeNull();
+    expect(parseMacd("12, 26")).toBeNull();
+    expect(parseMacd("12, 26, 9, 1")).toBeNull();
+    expect(parseMacd("12, 26, x")).toBeNull();
+    expect(parseMacd("1, 26, 9")).toBeNull();
+  });
+
+  it("KDJ：三个整数，周期至少为 2", () => {
+    expect(parseKdj("9, 3, 3")).toEqual([9, 3, 3]);
+    expect(parseKdj("14 1 3")).toEqual([14, 1, 3]);
+    expect(parseKdj("1, 3, 3")).toBeNull();
+    expect(parseKdj("9, 0, 3")).toBeNull();
+    expect(parseKdj("9, 3")).toBeNull();
+  });
+
+  it("RSI：一个 2 到 200 的整数", () => {
+    expect(parseRsiPeriod("14")).toBe(14);
+    expect(parseRsiPeriod(" 6 ")).toBe(6);
+    expect(parseRsiPeriod("1")).toBeNull();
+    expect(parseRsiPeriod("201")).toBeNull();
+    expect(parseRsiPeriod("6, 12")).toBeNull();
+    expect(parseRsiPeriod("")).toBeNull();
+  });
+
+  it("布林带：周期是整数，倍数可以是小数", () => {
+    expect(parseBoll("20, 2")).toEqual([20, 2]);
+    expect(parseBoll("26，2.5")).toEqual([26, 2.5]);
+    expect(parseBoll("20")).toBeNull();
+    expect(parseBoll("20.5, 2")).toBeNull();
+    expect(parseBoll("20, 0")).toBeNull();
+    expect(parseBoll("20, 11")).toBeNull();
+    expect(parseBoll("1, 2")).toBeNull();
   });
 });

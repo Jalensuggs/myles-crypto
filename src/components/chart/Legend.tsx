@@ -71,9 +71,14 @@ export const Legend = forwardRef<LegendHandle, LegendProps>(function Legend(
             {changePct !== undefined && `(${formatPct(changePct)})`}
           </span>
           <Item label="量" value={formatCompact(c.volume)} tone="" />
-          {value?.indicators?.ma.map((ma) => (
-            <span key={ma.period} className="legend__item" data-testid={`legend-ma-${ma.period}`} style={{ color: ma.color }}>
-              MA{ma.period} {ma.value === null ? "--" : formatPrice(ma.value, precision)}
+          {value?.indicators?.main.map((item) => (
+            <span key={item.id} className="legend__item" data-testid={`legend-${item.id}`} style={{ color: item.color }}>
+              {item.label} {item.value === null ? "--" : formatPrice(item.value, precision)}
+            </span>
+          ))}
+          {value?.indicators?.volume.map((item) => (
+            <span key={item.id} className="legend__item" data-testid={`legend-${item.id}`} style={{ color: item.color }}>
+              {item.label} {item.value === null ? "--" : formatCompact(item.value)}
             </span>
           ))}
         </>
