@@ -12,6 +12,7 @@ import { TopTabs } from "@/components/shell/TopTabs";
 import { queryClient } from "@/data";
 import { useDrawingsStore } from "@/stores/drawings.store";
 import { usePreferencesStore } from "@/stores/preferences.store";
+import { FlowStreams } from "./FlowStreams";
 import { MarketStreams } from "./MarketStreams";
 
 function isTyping(target: EventTarget | null): boolean {
@@ -56,6 +57,7 @@ export function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <MarketStreams />
+      <FlowStreams />
       <div className="terminal">
         <TopTabs />
         <ChartToolbar />

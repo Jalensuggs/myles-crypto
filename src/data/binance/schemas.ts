@@ -70,9 +70,28 @@ export const wsKlineSchema = z.object({
     l: numeric,
     c: numeric,
     v: numeric,
+    /** 主动买入的成交量 */
+    V: numeric.optional(),
     x: z.boolean(),
   }),
 });
+
+export const wsAggTradeSchema = z.object({
+  e: z.literal("aggTrade"),
+  s: z.string(),
+  p: numeric,
+  q: numeric,
+  T: z.number(),
+  /** 买方是否是挂单方。是的话这一笔就是主动卖出。 */
+  m: z.boolean(),
+});
+
+export const openInterestHistSchema = z.array(
+  z.object({
+    sumOpenInterest: numeric,
+    timestamp: z.number(),
+  }),
+);
 
 export const wsMiniTickerSchema = z.object({
   e: z.literal("24hrMiniTicker"),

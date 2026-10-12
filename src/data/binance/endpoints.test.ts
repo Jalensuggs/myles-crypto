@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { exchangeInfoUrl, klinesUrl, openInterestUrl, streams, ticker24hUrl, wsUrl } from "./endpoints";
+import {
+  exchangeInfoUrl,
+  klinesUrl,
+  openInterestHistUrl,
+  openInterestUrl,
+  streams,
+  supportsOpenInterestHistory,
+  ticker24hUrl,
+  wsUrl,
+} from "./endpoints";
 
 const cfg = {
   futuresRest: "https://f.example",
@@ -54,5 +63,17 @@ describe("其他地址", () => {
     expect(streams.miniTicker("BTCUSDT")).toBe("btcusdt@miniTicker");
     expect(streams.markPrice("BTCUSDT")).toBe("btcusdt@markPrice@1s");
     expect(streams.allForceOrders).toBe("!forceOrder@arr");
+    expect(streams.aggTrade("BTCUSDT")).toBe("btcusdt@aggTrade");
+  });
+
+  it("持仓量历史只有部分周期有", () => {
+    expect(openInterestHistUrl("btcusdt", "15m", cfg)).toBe(
+      "https://f.example/futures/data/openInterestHist?symbol=BTCUSDT&period=15m&limit=500",
+    );
+    for (const tf of ["5m", "30m", "1h", "4h", "1d"] as const) expect(supportsOpenInterestHistory(tf)).toBe(true);
+    for (const tf of ["1m", "1w", "1M"] as const) {
+      expect(supportsOpenInterestHistory(tf)).toBe(false);
+      expect(openInterestHistUrl("BTCUSDT", tf, cfg)).toBeNull();
+    }
   });
 });

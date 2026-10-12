@@ -58,6 +58,25 @@ export interface Candle {
   low: number;
   close: number;
   volume: number;
+  /** 其中主动买入的成交量。只有交易所直接给出的 K 线才有，合成的或官方股价的没有。 */
+  takerBuyVolume?: number;
+}
+
+/** 一笔成交 */
+export interface Trade {
+  /** Unix 毫秒 */
+  time: number;
+  price: number;
+  quantity: number;
+  /** 主动方：buy 是主动买入（吃掉卖单），sell 是主动卖出 */
+  side: "buy" | "sell";
+}
+
+/** 某一时刻的持仓量，单位为标的币数量 */
+export interface OpenInterestPoint {
+  /** Unix 秒 */
+  time: number;
+  value: number;
 }
 
 export interface CandlePage {
@@ -102,7 +121,7 @@ export interface SymbolInfo {
   quoteVolume: number;
 }
 
-export type EventKind = "liquidation" | "price-move" | "funding" | "range-break";
+export type EventKind = "liquidation" | "price-move" | "funding" | "range-break" | "big-trade" | "flow-pattern";
 export type EventTone = "positive" | "negative" | "neutral" | "warning";
 
 export interface MarketEvent {

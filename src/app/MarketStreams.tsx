@@ -3,6 +3,7 @@ import { memo, useEffect, useMemo } from "react";
 import { provider } from "@/data";
 import { FeedEngine } from "@/features/feed/rules";
 import { useFeedStore } from "@/stores/feed.store";
+import { useFlowStore } from "@/stores/flow.store";
 import { usePreferencesStore } from "@/stores/preferences.store";
 import { useTickersStore } from "@/stores/tickers.store";
 import { useWatchlistStore } from "@/stores/watchlist.store";
@@ -73,7 +74,10 @@ const MarketStream = memo(function MarketStream({ market, symbol, label, opened 
           tickers.setDerivatives(symbol, data);
           push(engine.onFunding(label, data.fundingRate, Date.now()));
         }),
-        provider.subscribeLiquidations(symbol, (liq) => push(engine.onLiquidation(liq, label))),
+        provider.subscribeLiquidations(symbol, (liq) => {
+          useFlowStore.getState().addLiquidation(liq);
+          push(engine.onLiquidation(liq, label));
+        }),
       );
     }
     return () => {

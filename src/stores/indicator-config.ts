@@ -18,6 +18,9 @@ export function useIndicatorConfig(): IndicatorConfig {
   const kdjParams = usePreferencesStore((s) => s.kdjParams);
   const rsiOn = usePreferencesStore((s) => s.indicatorRsi);
   const rsiPeriod = usePreferencesStore((s) => s.rsiPeriod);
+  const cvd = usePreferencesStore((s) => s.indicatorCvd);
+  const openInterest = usePreferencesStore((s) => s.indicatorOi);
+  const liquidations = usePreferencesStore((s) => s.indicatorLiq);
 
   return useMemo<IndicatorConfig>(
     () => ({
@@ -28,6 +31,9 @@ export function useIndicatorConfig(): IndicatorConfig {
       macd: macdOn ? { fast: macdParams[0], slow: macdParams[1], signal: macdParams[2] } : null,
       kdj: kdjOn ? { period: kdjParams[0], k: kdjParams[1], d: kdjParams[2] } : null,
       rsi: rsiOn ? rsiPeriod : null,
+      cvd,
+      openInterest,
+      liquidations,
     }),
     [
       maOn,
@@ -44,6 +50,9 @@ export function useIndicatorConfig(): IndicatorConfig {
       kdjParams,
       rsiOn,
       rsiPeriod,
+      cvd,
+      openInterest,
+      liquidations,
     ],
   );
 }

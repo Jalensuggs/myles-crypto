@@ -7,14 +7,18 @@ import type {
   Derivatives,
   Liquidation,
   MarketKind,
+  OpenInterestPoint,
   SymbolInfo,
   Ticker,
+  Trade,
 } from "@/types/market";
 import {
   exchangeInfoSchema,
   klinesSchema,
+  openInterestHistSchema,
   ticker24hSchema,
   tickerSnapshotSchema,
+  wsAggTradeSchema,
   wsForceOrderSchema,
   wsKlineSchema,
   wsMarkPriceSchema,
@@ -31,7 +35,7 @@ export function parseKlines(json: unknown): CandlePage {
       const d = decimalsOf(row[i] as string);
       if (d > precision) precision = d;
     }
-    return {
+    const candle: Candle = {
       time: Math.floor(row[0] / 1000),
       open: Number(row[1]),
       high: Number(row[2]),
@@ -39,6 +43,10 @@ export function parseKlines(json: unknown): CandlePage {
       close: Number(row[4]),
       volume: Number(row[5]),
     };
+    // 第 10 列是主动买入的成交量，用来算主动买卖的差额
+    const takerBuy = typeof row[9] === "string" ? Number(row[9]) : Number.NaN;
+    if (Number.isFinite(takerBuy)) candle.takerBuyVolume = takerBuy;
+    return candle;
   });
   return { candles: normalizeCandles(raw), precision: Math.min(Math.max(precision, 1), MAX_PRECISION) };
 }
@@ -90,17 +98,16 @@ export function parseWsKline(data: unknown): { candle: Candle; closed: boolean }
   const r = wsKlineSchema.safeParse(data);
   if (!r.success) return null;
   const k = r.data.k;
-  return {
-    candle: {
-      time: Math.floor(k.t / 1000),
-      open: Number(k.o),
-      high: Number(k.h),
-      low: Number(k.l),
-      close: Number(k.c),
-      volume: Number(k.v),
-    },
-    closed: k.x,
+  const candle: Candle = {
+    time: Math.floor(k.t / 1000),
+    open: Number(k.o),
+    high: Number(k.h),
+    low: Number(k.l),
+    close: Number(k.c),
+    volume: Number(k.v),
   };
+  if (k.V !== undefined) candle.takerBuyVolume = Number(k.V);
+  return { candle, closed: k.x };
 }
 
 export function parseWsTicker(data: unknown): Ticker | null {
@@ -131,6 +138,25 @@ export function parseTickerSnapshot(json: unknown): Ticker {
     quoteVolume24h: Number(t.quoteVolume),
     changePct: open > 0 ? ((last - open) / open) * 100 : 0,
   };
+}
+
+export function parseWsTrade(data: unknown): Trade | null {
+  const r = wsAggTradeSchema.safeParse(data);
+  if (!r.success) return null;
+  return {
+    time: r.data.T,
+    price: Number(r.data.p),
+    quantity: Number(r.data.q),
+    side: r.data.m ? "sell" : "buy",
+  };
+}
+
+export function parseOpenInterestHistory(json: unknown): OpenInterestPoint[] {
+  return openInterestHistSchema
+    .parse(json)
+    .map((row) => ({ time: Math.floor(row.timestamp / 1000), value: Number(row.sumOpenInterest) }))
+    .filter((p) => p.value > 0)
+    .sort((a, b) => a.time - b.time);
 }
 
 export function parseWsDerivatives(data: unknown): Derivatives | null {

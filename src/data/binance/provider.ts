@@ -10,14 +10,17 @@ import type {
   Liquidation,
   MarketKind,
   MarketRef,
+  OpenInterestPoint,
   SymbolInfo,
   Ticker,
   Timeframe,
+  Trade,
 } from "@/types/market";
 import {
   FEAR_GREED_URL,
   exchangeInfoUrl,
   klinesUrl,
+  openInterestHistUrl,
   openInterestUrl,
   streams,
   ticker24hUrl,
@@ -26,12 +29,14 @@ import {
 import {
   parseContractCategories,
   parseKlines,
+  parseOpenInterestHistory,
   parseSymbols,
   parseTickerSnapshot,
   parseWsDerivatives,
   parseWsKline,
   parseWsLiquidation,
   parseWsTicker,
+  parseWsTrade,
 } from "./parse";
 import { fearGreedSchema, openInterestSchema } from "./schemas";
 
@@ -133,6 +138,23 @@ export class BinanceProvider implements MarketDataProvider {
   async getOpenInterest(symbol: string, signal?: AbortSignal): Promise<number> {
     const data = openInterestSchema.parse(await getJson(openInterestUrl(symbol), signal));
     return Number(data.openInterest);
+  }
+
+  async getOpenInterestHistory(
+    symbol: string,
+    timeframe: Timeframe,
+    signal?: AbortSignal,
+  ): Promise<OpenInterestPoint[] | null> {
+    const url = openInterestHistUrl(symbol, timeframe);
+    if (!url) return null;
+    return parseOpenInterestHistory(await getJson(url, signal));
+  }
+
+  subscribeTrades(market: MarketRef, handler: (trade: Trade) => void): Unsubscribe {
+    return this.connection(market.market).subscribe(streams.aggTrade(market.symbol), (data) => {
+      const parsed = parseWsTrade(data);
+      if (parsed) handler(parsed);
+    });
   }
 
   getStockHistory(symbol: string, timeframe: Timeframe, signal?: AbortSignal): Promise<Candle[] | null> {

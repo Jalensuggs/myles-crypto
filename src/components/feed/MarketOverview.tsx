@@ -1,10 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { CoinIcon } from "@/components/common/CoinIcon";
 import { provider } from "@/data";
+import { summarizeBigTrades } from "@/features/flow/big-trades";
 import { PHASE_LABELS } from "@/features/session/stock-quote";
 import { formatCompact, formatCountdown, formatPct, formatPrice, formatUsd, guessPrecision } from "@/lib/format";
 import { useStockQuote } from "@/lib/use-stock-quote";
 import { useNow } from "@/lib/use-now";
+import { selectBigTrades, useFlowStore } from "@/stores/flow.store";
 import { useTickersStore } from "@/stores/tickers.store";
 import { selectActiveTab, useWorkspaceStore } from "@/stores/workspace.store";
 import { baseAsset, categoryOf, displayName, marketKey, marketTypeLabel } from "@/types/market";
@@ -42,6 +45,11 @@ export function MarketOverview() {
     refetchInterval: 60 * 60_000,
   });
 
+  const isCrypto = categoryOf(market) === "crypto";
+  const bigTradeSelector = useMemo(() => selectBigTrades(key), [key]);
+  const bigTradeList = useFlowStore(bigTradeSelector);
+  const bigTrades = summarizeBigTrades(bigTradeList, now - 3600_000);
+  const bigTradeCount = bigTrades.buyCount + bigTrades.sellCount;
   const precision = storedPrecision ?? (ticker ? guessPrecision(ticker.last) : 2);
   const quote = useStockQuote(market);
   const changePct = quote ? quote.changePct : ticker?.changePct;
@@ -91,6 +99,27 @@ export function MarketOverview() {
         </dd>
         <dt>24h 成交额</dt>
         <dd>{formatUsd(ticker?.quoteVolume24h, 2)}</dd>
+        {isCrypto && (
+          <>
+            <dt title="最近一小时里大单主动买入减去主动卖出的金额，从打开页面起统计">大单净流入（1 小时）</dt>
+            <dd data-testid="overview-big-trades">
+              {bigTradeCount === 0 ? (
+                <span className="muted">暂无大单</span>
+              ) : (
+                <>
+                  <span className={bigTrades.netUsd >= 0 ? "up" : "down"}>
+                    {bigTrades.netUsd >= 0 ? "+" : "−"}
+                    {formatUsd(Math.abs(bigTrades.netUsd))}
+                  </span>
+                  <span className="muted">
+                    {" "}
+                    · 买 {bigTrades.buyCount} 卖 {bigTrades.sellCount}
+                  </span>
+                </>
+              )}
+            </dd>
+          </>
+        )}
         {isPerp && (
           <>
             <dt>标记价格</dt>

@@ -54,7 +54,14 @@ export interface IndicatorConfig {
   kdj: { period: number; k: number; d: number } | null;
   /** RSI 的周期 */
   rsi: number | null;
+  /** 以下三项是资金面数据，只对加密货币有效 */
+  cvd: boolean;
+  openInterest: boolean;
+  liquidations: boolean;
 }
+
+export const CVD_COLOR = "#2ee6e6";
+export const OPEN_INTEREST_COLOR = "#f0b90b";
 
 function tokens(text: string): string[] {
   return text

@@ -35,6 +35,16 @@ export const preferencesSchema = z.object({
   indicatorMa: z.boolean().default(true),
   indicatorMacd: z.boolean().default(false),
   indicatorRsi: z.boolean().default(false),
+  // 资金面副图，只对加密货币有效，默认不开
+  indicatorCvd: z.boolean().default(false),
+  indicatorOi: z.boolean().default(false),
+  indicatorLiq: z.boolean().default(false),
+  /** 在市场异动里提示大单成交 */
+  bigTradeAlerts: z.boolean().default(true),
+  /** 在市场异动里提示"吸收"形态 */
+  flowPatternAlerts: z.boolean().default(true),
+  /** 多大的成交算大单（美元）。0 表示自动：按每个标的 24 小时成交额的万分之二，不低于 10 万 */
+  bigTradeMinUsd: z.number().min(0).max(1e9).default(0),
   // 以下几个指标默认不开
   indicatorEma: z.boolean().default(false),
   indicatorBoll: z.boolean().default(false),
@@ -76,6 +86,12 @@ export const DEFAULT_PREFERENCES: Preferences = {
   indicatorMa: true,
   indicatorMacd: false,
   indicatorRsi: false,
+  indicatorCvd: false,
+  indicatorOi: false,
+  indicatorLiq: false,
+  bigTradeAlerts: true,
+  flowPatternAlerts: true,
+  bigTradeMinUsd: 0,
   indicatorEma: false,
   indicatorBoll: false,
   indicatorVolMa: false,

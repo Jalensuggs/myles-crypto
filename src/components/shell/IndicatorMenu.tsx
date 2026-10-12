@@ -34,6 +34,14 @@ const GROUPS: { title: string; items: Item[] }[] = [
       { id: "rsi", key: "indicatorRsi", label: "RSI 相对强弱", hint: (p) => String(p.rsiPeriod) },
     ],
   },
+  {
+    title: "资金面（仅加密货币）",
+    items: [
+      { id: "cvd", key: "indicatorCvd", label: "CVD 主动买卖差", hint: () => "累计" },
+      { id: "oi", key: "indicatorOi", label: "持仓量", hint: () => "仅合约" },
+      { id: "liq", key: "indicatorLiq", label: "爆仓量", hint: () => "仅合约" },
+    ],
+  },
 ];
 
 const ALL_ITEMS = GROUPS.flatMap((g) => g.items);

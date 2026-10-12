@@ -13,7 +13,7 @@ import { ChevronsRight } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { DrawingLayer } from "@/components/drawing/DrawingLayer";
 import { fetchCandlePage, fetchOfficialHistory, provider } from "@/data";
-import { KLINE_PAGE_SIZE } from "@/data/binance/endpoints";
+import { KLINE_PAGE_SIZE, supportsOpenInterestHistory } from "@/data/binance/endpoints";
 import { describeError } from "@/data/binance/provider";
 import { loadLatest, loadOlder, type LoaderOptions, type PageFetcher } from "@/data/candle-loader";
 import { mergeCandle, mergeCandleLists } from "@/data/candles";
@@ -25,8 +25,10 @@ import {
   sessionPlan,
 } from "@/features/session/aggregate";
 import { matchesContract, mergeOfficial } from "@/features/session/official";
+import { earliestBucketTime, sumLiquidations } from "@/features/flow/liquidation-buckets";
 import { isUsRegularSession } from "@/features/session/us-session";
 import { useDrawingsStore } from "@/stores/drawings.store";
+import { useFlowStore } from "@/stores/flow.store";
 import { useIndicatorConfig } from "@/stores/indicator-config";
 import { trendColors, usePreferencesStore, type TrendColors } from "@/stores/preferences.store";
 import { useTickersStore } from "@/stores/tickers.store";
@@ -97,6 +99,7 @@ const SESSION_SECONDS = 6.5 * 3600;
 const OFFICIAL_REFRESH_DELAY_MS = 20_000;
 /** 两次补取之间至少间隔这么久 */
 const OFFICIAL_REFRESH_MIN_GAP_MS = 60_000;
+const OPEN_INTEREST_REFRESH_MS = 30_000;
 const MIN_MORE_BARS = 100;
 const MAX_MORE_PAGES = 5;
 
@@ -108,7 +111,21 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
   const precision = useTickersStore((s) => s.precision[key]) ?? 2;
   const isStock = categoryOf(market) === "stock";
   const sessionOnly = usePreferencesStore((s) => s.stockSessionOnly) && isStock;
-  const indicatorConfig = useIndicatorConfig();
+  // 资金面的三个副图只对加密货币有效：持仓量和爆仓只有合约才有，持仓量历史还受周期限制
+  const baseIndicatorConfig = useIndicatorConfig();
+  const isCrypto = categoryOf(market) === "crypto";
+  const isCryptoPerp = isCrypto && market.market === "perp";
+  const showOpenInterest = baseIndicatorConfig.openInterest && isCryptoPerp && supportsOpenInterestHistory(timeframe);
+  const showLiquidations = baseIndicatorConfig.liquidations && isCryptoPerp;
+  const indicatorConfig = useMemo(
+    () => ({
+      ...baseIndicatorConfig,
+      cvd: baseIndicatorConfig.cvd && isCrypto,
+      openInterest: showOpenInterest,
+      liquidations: showLiquidations,
+    }),
+    [baseIndicatorConfig, isCrypto, showOpenInterest, showLiquidations],
+  );
 
   const containerRef = useRef<HTMLDivElement>(null);
   const legendRef = useRef<LegendHandle>(null);
@@ -338,6 +355,88 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
     layer.setData(candlesRef.current, live.current.offset);
     if (!live.current.hovering) showRef.current(null);
   }, [indicatorConfig, colors, precision]);
+
+  // ── 资金面数据：持仓量历史和爆仓累计，不在 K 线里，要另外取 ──
+  useEffect(() => {
+    const layer = indicatorsRef.current;
+    if (!layer) return;
+    if (!showOpenInterest && !showLiquidations) {
+      layer.setFlow(null);
+      return;
+    }
+    const step = TIMEFRAME_SECONDS[timeframe];
+    const symbol = market.symbol;
+    const openInterest = new Map<number, number>();
+    let active = true;
+    const redraw = () => {
+      if (!active || !indicatorsRef.current) return;
+      indicatorsRef.current.setData(candlesRef.current, live.current.offset);
+      if (!live.current.hovering) showRef.current(null);
+    };
+
+    layer.setFlow({
+      openInterest,
+      liquidations: (candleTime) => {
+        const buckets = useFlowStore.getState().liquidations[symbol];
+        const earliest = buckets ? earliestBucketTime(buckets) : null;
+        // 这根 K 线结束时还没有开始记录爆仓，就不画（而不是画成 0）
+        if (!buckets || earliest === null || candleTime + step <= earliest) return null;
+        return sumLiquidations(buckets, candleTime, candleTime + step);
+      },
+    });
+    redraw();
+
+    const timers: ReturnType<typeof setInterval>[] = [];
+    if (showOpenInterest) {
+      void provider
+        .getOpenInterestHistory(symbol, timeframe)
+        .then((points) => {
+          if (!active || !points) return;
+          for (const point of points) openInterest.set(Math.floor(point.time / step) * step, point.value);
+          redraw();
+        })
+        .catch(() => {
+          // 取不到历史时这个副图暂时是空的，下面的定时刷新会慢慢补上最新的点
+        });
+      // 历史数据不含正在走的这一根，定时取当前持仓量补上
+      const refreshLatest = () => {
+        void provider
+          .getOpenInterest(symbol)
+          .then((value) => {
+            const last = candlesRef.current[candlesRef.current.length - 1];
+            if (!active || !last) return;
+            openInterest.set(last.time, value);
+            redraw();
+          })
+          .catch(() => {});
+      };
+      refreshLatest();
+      timers.push(setInterval(refreshLatest, OPEN_INTEREST_REFRESH_MS));
+    }
+
+    // 有新的爆仓时重画，最多每秒一次
+    let dirty = false;
+    const offFlow = showLiquidations
+      ? useFlowStore.subscribe((state, prev) => {
+          if (state.liquidations[symbol] !== prev.liquidations[symbol]) dirty = true;
+        })
+      : () => {};
+    timers.push(
+      setInterval(() => {
+        if (!dirty) return;
+        dirty = false;
+        redraw();
+      }, 1000),
+    );
+
+    return () => {
+      active = false;
+      offFlow();
+      for (const timer of timers) clearInterval(timer);
+    };
+    // market 的内容由 key 唯一确定
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, timeframe, showOpenInterest, showLiquidations]);
 
   // ── 数据：标的或周期变化时重新加载并订阅 ──
   useEffect(() => {

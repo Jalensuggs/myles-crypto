@@ -56,6 +56,28 @@ export function openInterestUrl(symbol: string, cfg: EndpointConfig = endpoints)
   return `${cfg.futuresRest}/fapi/v1/openInterest?symbol=${encodeURIComponent(symbol.toUpperCase())}`;
 }
 
+/** 持仓量历史支持的统计周期；1 分钟、周线和月线没有 */
+const OI_PERIODS: Partial<Record<Timeframe, string>> = {
+  "5m": "5m",
+  "15m": "15m",
+  "30m": "30m",
+  "1h": "1h",
+  "4h": "4h",
+  "1d": "1d",
+};
+
+export function supportsOpenInterestHistory(timeframe: Timeframe): boolean {
+  return OI_PERIODS[timeframe] !== undefined;
+}
+
+/** 持仓量历史。交易所只保留最近 30 天，每次最多 500 个点。 */
+export function openInterestHistUrl(symbol: string, timeframe: Timeframe, cfg: EndpointConfig = endpoints): string | null {
+  const period = OI_PERIODS[timeframe];
+  if (!period) return null;
+  const params = new URLSearchParams({ symbol: symbol.toUpperCase(), period, limit: "500" });
+  return `${cfg.futuresRest}/futures/data/openInterestHist?${params.toString()}`;
+}
+
 export function wsUrl(market: MarketKind, cfg: EndpointConfig = endpoints): string {
   return market === "perp" ? cfg.futuresWs : cfg.spotWs;
 }
@@ -65,6 +87,7 @@ export const FEAR_GREED_URL = "https://api.alternative.me/fng/?limit=1";
 export const streams = {
   kline: (symbol: string, timeframe: Timeframe) => `${symbol.toLowerCase()}@kline_${timeframe}`,
   miniTicker: (symbol: string) => `${symbol.toLowerCase()}@miniTicker`,
+  aggTrade: (symbol: string) => `${symbol.toLowerCase()}@aggTrade`,
   markPrice: (symbol: string) => `${symbol.toLowerCase()}@markPrice@1s`,
   /** 全市场爆仓流。实测有稳定推送，按标的过滤在客户端完成，多个标的共用一个订阅 */
   allForceOrders: "!forceOrder@arr",

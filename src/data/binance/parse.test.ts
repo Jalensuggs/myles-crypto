@@ -3,11 +3,13 @@ import {
   parseTickerSnapshot,
   parseContractCategories,
   parseKlines,
+  parseOpenInterestHistory,
   parseSymbols,
   parseWsDerivatives,
   parseWsKline,
   parseWsLiquidation,
   parseWsTicker,
+  parseWsTrade,
 } from "./parse";
 
 const row = (t: number, o: string, h: string, l: string, c: string, v = "1.5") => [t, o, h, l, c, v, t + 59999, "0", 1, "0", "0", "0"];
@@ -15,13 +17,22 @@ const row = (t: number, o: string, h: string, l: string, c: string, v = "1.5") =
 describe("parseKlines", () => {
   it("把毫秒时间转成秒并解析数字", () => {
     const page = parseKlines([row(1700000040000, "100.10", "101.00", "99.50", "100.70")]);
-    expect(page.candles).toEqual([{ time: 1700000040, open: 100.1, high: 101, low: 99.5, close: 100.7, volume: 1.5 }]);
+    expect(page.candles).toEqual([
+      { time: 1700000040, open: 100.1, high: 101, low: 99.5, close: 100.7, volume: 1.5, takerBuyVolume: 0 },
+    ]);
   });
 
   it("从原始字符串推断价格精度，忽略尾部的 0", () => {
     expect(parseKlines([row(60000, "84224.02000000", "84344.00000000", "83962.00000000", "83991.51000000")]).precision).toBe(2);
     expect(parseKlines([row(60000, "0.08724", "0.08730", "0.08710", "0.08725")]).precision).toBe(5);
     expect(parseKlines([row(60000, "100", "101", "99", "100")]).precision).toBe(1);
+  });
+
+  it("带上主动买入的成交量（第 10 列）", () => {
+    const page = parseKlines([[1791810000000, "82724.40", "82775.90", "82595.80", "82702.50", "1810.069", 1791810899999, "149640203.22", 27711, "547.308", "45255588.11", "0"]]);
+    expect(page.candles[0]).toMatchObject({ volume: 1810.069, takerBuyVolume: 547.308 });
+    // 列数不够时没有这一项，其余照常
+    expect(parseKlines([[60000, "1", "2", "1", "2", "5"]]).candles[0]!.takerBuyVolume).toBeUndefined();
   });
 
   it("乱序和重复的数据会被整理好", () => {
@@ -190,6 +201,39 @@ describe("WebSocket 消息", () => {
     const buy = parseWsLiquidation({ e: "forceOrder", o: { s: "BTCUSDT", S: "BUY", q: "1", p: "83000", ap: "0", T: 5 } });
     expect(buy?.side).toBe("short");
     expect(buy?.price).toBe(83000);
+  });
+
+  it("解析逐笔成交：买方是挂单方时这一笔是主动卖出", () => {
+    expect(parseWsTrade({ e: "aggTrade", s: "BTCUSDT", p: "83673.70", q: "0.014", T: 1791794416211, m: true })).toEqual({
+      time: 1791794416211,
+      price: 83673.7,
+      quantity: 0.014,
+      side: "sell",
+    });
+    expect(parseWsTrade({ e: "aggTrade", s: "BTCUSDT", p: "1", q: "2", T: 5, m: false })?.side).toBe("buy");
+    expect(parseWsTrade({ e: "trade" })).toBeNull();
+  });
+
+  it("K 线推送里的主动买入成交量", () => {
+    const parsed = parseWsKline({
+      e: "kline",
+      s: "BTCUSDT",
+      k: { t: 1700000040000, i: "1m", o: "100", h: "102", l: "99", c: "101", v: "12", V: "7.5", x: false },
+    });
+    expect(parsed?.candle.takerBuyVolume).toBe(7.5);
+  });
+
+  it("持仓量历史：毫秒转秒，按时间排好", () => {
+    const points = parseOpenInterestHistory([
+      { symbol: "BTCUSDT", sumOpenInterest: "94162.52", sumOpenInterestValue: "1", timestamp: 1791809100000 },
+      { symbol: "BTCUSDT", sumOpenInterest: "94903.229", sumOpenInterestValue: "1", timestamp: 1791808200000 },
+    ]);
+    expect(points).toEqual([
+      { time: 1791808200, value: 94903.229 },
+      { time: 1791809100, value: 94162.52 },
+    ]);
+    expect(parseOpenInterestHistory([])).toEqual([]);
+    expect(() => parseOpenInterestHistory({ code: -1 })).toThrow();
   });
 
   it("无法识别的消息返回 null", () => {

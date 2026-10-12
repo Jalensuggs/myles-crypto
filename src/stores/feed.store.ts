@@ -7,7 +7,7 @@ export const MAX_EVENTS = 200;
 
 export const eventSchema = z.object({
   id: z.string(),
-  kind: z.enum(["liquidation", "price-move", "funding", "range-break"]),
+  kind: z.enum(["liquidation", "price-move", "funding", "range-break", "big-trade", "flow-pattern"]),
   symbol: z.string(),
   title: z.string(),
   detail: z.string().optional(),

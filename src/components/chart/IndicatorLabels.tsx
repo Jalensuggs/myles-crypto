@@ -1,7 +1,14 @@
 import { forwardRef, useEffect, useImperativeHandle, useState, type RefObject } from "react";
-import { formatPrice } from "@/lib/format";
+import { formatCompact, formatPrice, formatUsd } from "@/lib/format";
 import type { ChartBridge } from "./bridge";
-import type { IndicatorItem, IndicatorLayer, IndicatorValues, SubPaneId } from "./indicator-layer";
+import {
+  SUB_PANES,
+  type IndicatorItem,
+  type IndicatorLayer,
+  type IndicatorPaneValues,
+  type IndicatorValues,
+  type SubPaneId,
+} from "./indicator-layer";
 
 export interface IndicatorLabelsHandle {
   set: (values: IndicatorValues | null) => void;
@@ -14,11 +21,19 @@ interface IndicatorLabelsProps {
 }
 
 type Tops = Partial<Record<SubPaneId, number>>;
-const PANES: SubPaneId[] = ["macd", "kdj", "rsi"];
+const PANES = SUB_PANES;
 
 function toneOf(item: IndicatorItem): string {
-  if (!item.signed) return "";
+  if (item.tone === "up" || item.tone === "down") return item.tone;
+  if (item.tone !== "signed") return "";
   return item.value === null ? "muted" : item.value >= 0 ? "up" : "down";
+}
+
+function show(pane: IndicatorPaneValues, value: number | null): string {
+  if (value === null) return "--";
+  if (pane.format === "compact") return formatCompact(value, pane.digits);
+  if (pane.format === "usd") return formatUsd(value, pane.digits);
+  return formatPrice(value, pane.digits);
 }
 
 /** MACD、KDJ、RSI 副图左上角的文字标签。位置跟着副图走，用户拖动分隔线后也会更新。 */
@@ -56,10 +71,10 @@ export const IndicatorLabels = forwardRef<IndicatorLabelsHandle, IndicatorLabels
           <div key={pane.id} className="pane__sublabel" data-testid={`indicator-label-${pane.id}`} style={{ top: top + 4 }}>
             <span className="legend__label">{pane.title}</span>
             {pane.items.map((item) => (
-              <span key={item.id} className={toneOf(item)} style={item.signed ? undefined : { color: item.color }}>
-                {/* 只有一条线的指标（RSI）标题已经说明了是什么，不再重复名称 */}
+              <span key={item.id} className={toneOf(item)} style={item.tone ? undefined : { color: item.color }}>
+                {/* 只有一条线的指标（RSI、CVD 等）标题已经说明了是什么，不再重复名称 */}
                 {pane.items.length > 1 && `${item.label} `}
-                {item.value === null ? "--" : formatPrice(item.value, pane.digits)}
+                {show(pane, item.value)}
               </span>
             ))}
           </div>

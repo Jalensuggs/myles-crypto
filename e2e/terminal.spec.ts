@@ -777,8 +777,8 @@ test.describe("右侧栏", () => {
     await open(page);
     await page.getByTestId("dock-tab-feed").click();
     await expect(page.getByTestId("event-feed")).toBeVisible();
-    await expect(page.locator(".event").first()).toBeVisible({ timeout: 25_000 });
-    await expect(page.locator(".event").first()).toContainText("爆仓");
+    // 列表里还会有大单等其他事件，这里只找爆仓
+    await expect(page.locator(".event", { hasText: "爆仓" }).first()).toBeVisible({ timeout: 25_000 });
   });
 });
 
@@ -1351,6 +1351,128 @@ test.describe("更多指标", () => {
     await page.reload();
     await expect(page.getByTestId("indicator-label-macd")).toContainText("MACD(5,10,3)");
     await expect(page.getByTestId("indicator-label-rsi")).toContainText("RSI(6)");
+  });
+});
+
+test.describe("加密货币资金面", () => {
+  const enable = async (page: Page, ...ids: string[]) => {
+    await page.getByTestId("indicator-button").click();
+    for (const id of ids) await page.getByTestId(`indicator-${id}`).click();
+    await page.keyboard.press("Escape");
+  };
+
+  test("CVD、持仓量、爆仓量默认不开", async ({ page }) => {
+    await open(page);
+    for (const id of ["cvd", "oi", "liq"]) await expect(page.getByTestId(`indicator-label-${id}`)).toHaveCount(0);
+    await page.getByTestId("indicator-button").click();
+    for (const id of ["cvd", "oi", "liq"]) {
+      await expect(page.getByTestId(`indicator-${id}`)).toHaveAttribute("aria-checked", "false");
+    }
+  });
+
+  test("合约上三个副图都有；现货只有 CVD；美股一个都没有", async ({ page }) => {
+    await open(page);
+    await enable(page, "cvd", "oi", "liq");
+    const pane = page.getByTestId("pane-0");
+
+    // 默认标签是比特币现货：只有 CVD
+    await expect(page.getByTestId("indicator-label-cvd")).toHaveText(/CVD 主动买卖累计差\s*-?[\d,.万亿]+/);
+    await expect(page.getByTestId("indicator-label-oi")).toHaveCount(0);
+    await expect(page.getByTestId("indicator-label-liq")).toHaveCount(0);
+
+    // 以太坊合约：三个都有
+    await page.getByRole("button", { name: "切换到 ETHUSDT.P" }).click();
+    await expect(pane).toHaveAttribute("data-phase", "ready");
+    await expect(page.getByTestId("indicator-label-cvd")).toBeVisible();
+    await expect(page.getByTestId("indicator-label-oi")).toHaveText(/持仓量\s*[\d,.万亿]+/);
+    await expect(page.getByTestId("indicator-label-liq")).toContainText("爆仓");
+
+    // 苹果：资金面只做加密货币
+    await page.getByRole("button", { name: "切换到 AAPL", exact: true }).click();
+    await expect(pane).toHaveAttribute("data-symbol", "AAPL");
+    await expect(pane).toHaveAttribute("data-phase", "ready");
+    for (const id of ["cvd", "oi", "liq"]) await expect(page.getByTestId(`indicator-label-${id}`)).toHaveCount(0);
+    await expect(page.getByTestId("legend-ma-7")).toBeVisible();
+  });
+
+  test("持仓量在 1 分钟和周线上没有数据，副图不显示；换回支持的周期又出现", async ({ page }) => {
+    await open(page);
+    await page.getByRole("button", { name: "切换到 ETHUSDT.P" }).click();
+    await enable(page, "oi");
+    await expect(page.getByTestId("indicator-label-oi")).toBeVisible();
+    for (const tf of ["1m", "1w"]) {
+      await page.getByTestId(`tf-${tf}`).click();
+      await expect(page.getByTestId("pane-0")).toHaveAttribute("data-phase", "ready");
+      await expect(page.getByTestId("indicator-label-oi")).toHaveCount(0);
+    }
+    await page.getByTestId("tf-1h").click();
+    await expect(page.getByTestId("indicator-label-oi")).toHaveText(/持仓量\s*[\d,.万亿]+/);
+  });
+
+  test("爆仓量从打开页面起累计，出现爆仓后副图里有数值", async ({ page }) => {
+    await open(page);
+    await page.getByRole("button", { name: "切换到 ETHUSDT.P" }).click();
+    await page.getByTestId("tf-15m").click();
+    await enable(page, "liq");
+    const label = page.getByTestId("indicator-label-liq");
+    await expect(label).toBeVisible();
+    // 菜单关掉后鼠标正好停在图表上，副图显示的是鼠标所指那根 K 线的数值。
+    // 把鼠标移开，才是最新一根的数值。
+    await page.getByTestId("top-tabs").hover();
+    await expect(label).toHaveText(/(多单|空单) \$[\d,.万亿]+/, { timeout: 30_000 });
+
+    // 刷新后之前记下的爆仓还在
+    await page.reload();
+    await expect(page.getByTestId("pane-0")).toHaveAttribute("data-phase", "ready");
+    await page.getByTestId("top-tabs").hover();
+    await expect(page.getByTestId("indicator-label-liq")).toHaveText(/(多单|空单) \$[\d,.万亿]+/, { timeout: 15_000 });
+  });
+
+  test("大单显示在市场异动里，概览统计净流入", async ({ page }) => {
+    test.skip(!isWide(page), "只在宽屏下适用");
+    await open(page);
+    await page.getByTestId("dock-tab-feed").click();
+    const big = page.locator(".event", { hasText: /大单(买入|卖出)/ });
+    await expect(big.first()).toBeVisible({ timeout: 20_000 });
+    await expect(big.first()).toHaveText(/大单(买入|卖出) \$[\d,.万亿]+/);
+    await expect(big.first()).toHaveText(/(成交价|均价) [\d,.]+/);
+
+    // 只有加密货币会出现大单
+    const symbols = await big.locator(".event__symbol").allTextContents();
+    for (const symbol of symbols) expect(["BTCUSDT", "ETHUSDT.P", "SOLUSDT.P"]).toContain(symbol);
+
+    await expect(page.getByTestId("overview-big-trades")).toHaveText(/买 \d+ 卖 \d+/, { timeout: 20_000 });
+
+    // 美股的概览里没有这一行
+    await page.getByRole("button", { name: "切换到 AAPL", exact: true }).click();
+    await expect(page.getByTestId("pane-0")).toHaveAttribute("data-symbol", "AAPL");
+    await expect(page.getByTestId("overview-big-trades")).toHaveCount(0);
+  });
+
+  test("关掉大单提醒后不再出现新的大单事件，门槛调得很高时也没有", async ({ page }) => {
+    test.skip(!isWide(page), "只在宽屏下适用");
+    await open(page);
+    await page.getByTestId("settings-button").click();
+    const dialog = page.getByTestId("settings-dialog");
+    await dialog.getByRole("group", { name: "大单提醒" }).getByRole("button", { name: "关" }).click();
+    await dialog.getByRole("button", { name: "完成" }).click();
+
+    await page.getByTestId("dock-tab-feed").click();
+    await page.getByRole("button", { name: "清空异动记录" }).click();
+    // 等爆仓事件出现，说明事件流在正常工作，而其中没有大单
+    await expect(page.locator(".event", { hasText: "爆仓" }).first()).toBeVisible({ timeout: 25_000 });
+    await expect(page.locator(".event", { hasText: /大单(买入|卖出)/ })).toHaveCount(0);
+    // 提醒关了，统计还在做
+    await expect(page.getByTestId("overview-big-trades")).toHaveText(/买 \d+ 卖 \d+/);
+
+    // 把门槛调到 10 亿美元：刷新后不会再有任何成交够得上
+    await page.getByTestId("settings-button").click();
+    await dialog.getByTestId("big-trade-min").fill("1000000000");
+    await dialog.getByRole("button", { name: "完成" }).click();
+    await page.reload();
+    await expect(page.getByTestId("pane-0")).toHaveAttribute("data-phase", "ready");
+    await page.waitForTimeout(6000);
+    await expect(page.getByTestId("overview-big-trades")).toContainText("暂无大单");
   });
 });
 

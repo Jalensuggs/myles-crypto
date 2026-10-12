@@ -5,9 +5,11 @@ import type {
   Liquidation,
   MarketKind,
   MarketRef,
+  OpenInterestPoint,
   SymbolInfo,
   Ticker,
   Timeframe,
+  Trade,
 } from "@/types/market";
 
 export interface CandleQuery {
@@ -36,6 +38,8 @@ export interface MarketDataProvider {
   getSymbols(market: MarketKind, signal?: AbortSignal): Promise<SymbolInfo[]>;
   /** 持仓量，单位为标的币数量 */
   getOpenInterest(symbol: string, signal?: AbortSignal): Promise<number>;
+  /** 持仓量的历史曲线。这个周期没有数据时返回 null。 */
+  getOpenInterestHistory(symbol: string, timeframe: Timeframe, signal?: AbortSignal): Promise<OpenInterestPoint[] | null>;
   getFearGreed(signal?: AbortSignal): Promise<FearGreed>;
   /**
    * 美股的官方历史 K 线（只含常规交易时段，已按图表周期整理好）。
@@ -51,6 +55,8 @@ export interface MarketDataProvider {
     handler: (candle: Candle, closed: boolean) => void,
   ): Unsubscribe;
   subscribeTicker(market: MarketRef, handler: (ticker: Ticker) => void): Unsubscribe;
+  /** 逐笔成交，用来识别大单 */
+  subscribeTrades(market: MarketRef, handler: (trade: Trade) => void): Unsubscribe;
   subscribeDerivatives(symbol: string, handler: (data: Derivatives) => void): Unsubscribe;
   subscribeLiquidations(symbol: string, handler: (liq: Liquidation) => void): Unsubscribe;
 

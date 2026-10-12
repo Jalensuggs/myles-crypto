@@ -12,9 +12,11 @@ import {
   type Liquidation,
   type MarketKind,
   type MarketRef,
+  type OpenInterestPoint,
   type SymbolInfo,
   type Ticker,
   type Timeframe,
+  type Trade,
 } from "@/types/market";
 
 const BASE_PRICES: Record<string, number> = {
@@ -110,7 +112,9 @@ function mockCandle(symbol: string, openTime: number, step: number, nowSec: numb
   high += wick * noise(seed, bucket);
   low -= wick * noise(seed, bucket + 7919);
   const volume = (200 + 900 * noise(seed, bucket + 104729)) * (step / 60) * ((end - openTime) / step);
-  return { time: openTime, open, high, low, close, volume };
+  // 主动买入占比在 35% 到 65% 之间波动，上涨的 K 线偏多
+  const buyShare = 0.35 + 0.3 * noise(seed, bucket + 15485863) + (close >= open ? 0.05 : -0.05);
+  return { time: openTime, open, high, low, close, volume, takerBuyVolume: volume * Math.min(0.95, Math.max(0.05, buyShare)) };
 }
 
 export class MockProvider implements MarketDataProvider {
@@ -160,6 +164,37 @@ export class MockProvider implements MarketDataProvider {
 
   async getOpenInterest(symbol: string): Promise<number> {
     return 2e9 / basePrice(symbol);
+  }
+
+  async getOpenInterestHistory(symbol: string, timeframe: Timeframe): Promise<OpenInterestPoint[] | null> {
+    if (timeframe === "1m" || timeframe === "1w" || timeframe === "1M") return null;
+    const step = TIMEFRAME_SECONDS[timeframe];
+    const last = Math.floor(this.nowSec() / step) * step;
+    const base = 2e9 / basePrice(symbol);
+    const seed = hash(symbol);
+    const points: OpenInterestPoint[] = [];
+    for (let i = 299; i >= 0; i--) {
+      const time = last - i * step;
+      points.push({ time, value: base * (1 + 0.06 * Math.sin(time / 40000 + seed) + 0.01 * noise(seed, time / step)) });
+    }
+    return points;
+  }
+
+  /** 每半秒一笔成交，大约每 4 秒出现一笔足以算作大单的 */
+  subscribeTrades(market: MarketRef, handler: (trade: Trade) => void): Unsubscribe {
+    const seed = hash(`${market.market}:${market.symbol}`);
+    let tick = 0;
+    const timer = setInterval(() => {
+      tick += 1;
+      const now = this.now();
+      const price = mockPrice(market.symbol, Math.floor(now / 1000));
+      const big = noise(seed, tick) < 0.12;
+      // 模拟的 24 小时成交额是 basePrice × 12 万，大单的自动门槛是它的万分之二（至少 10 万美元）
+      const threshold = Math.max(100_000, basePrice(market.symbol) * 24);
+      const notional = big ? threshold * (1.2 + 2 * noise(seed, tick + 5)) : 500 + 4000 * noise(seed, tick + 9);
+      handler({ time: now, price, quantity: notional / price, side: noise(seed, tick + 3) > 0.5 ? "buy" : "sell" });
+    }, 500);
+    return () => clearInterval(timer);
   }
 
   async getFearGreed(): Promise<FearGreed> {
@@ -256,7 +291,8 @@ export class MockProvider implements MarketDataProvider {
     let tick = 0;
     const timer = setInterval(() => {
       tick += 1;
-      if (noise(seed, tick) > 0.12) return;
+      // 大约每 6 秒一笔，测试里不用等太久
+      if (noise(seed, tick) > 0.35) return;
       const now = this.now();
       const price = mockPrice(symbol, Math.floor(now / 1000));
       const notional = 60_000 + noise(seed, tick + 31) * 900_000;

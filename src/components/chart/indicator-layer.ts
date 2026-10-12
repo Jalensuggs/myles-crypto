@@ -6,9 +6,12 @@ import {
   type ISeriesApi,
   type UTCTimestamp,
 } from "lightweight-charts";
+import { cumulativeDelta } from "@/features/flow/cvd";
+import type { LiquidationSum } from "@/features/flow/liquidation-buckets";
 import { boll, ema, kdj, macd, rsi, sma } from "@/features/indicators/calc";
 import {
   BOLL_COLORS,
+  CVD_COLOR,
   EMA_COLORS,
   KDJ_COLORS,
   KDJ_OVERBOUGHT,
@@ -16,6 +19,7 @@ import {
   MACD_DEA_COLOR,
   MACD_DIF_COLOR,
   MA_COLORS,
+  OPEN_INTEREST_COLOR,
   RSI_COLOR,
   RSI_OVERBOUGHT,
   RSI_OVERSOLD,
@@ -28,7 +32,18 @@ import type { Candle } from "@/types/market";
 type AnySeries = ISeriesApi<"Line"> | ISeriesApi<"Histogram">;
 
 /** 指标画在哪里：主图、成交量的刻度上，或各自的副图 */
-export type SubPaneId = "macd" | "kdj" | "rsi";
+export type SubPaneId = "macd" | "kdj" | "rsi" | "cvd" | "oi" | "liq";
+export const SUB_PANES: SubPaneId[] = ["macd", "kdj", "rsi", "cvd", "oi", "liq"];
+
+/**
+ * 不能从 K 线算出来、要另外提供的资金面数据。
+ * openInterest：K 线开盘时间 → 持仓量；liquidations：给定一根 K 线的开盘时间，返回这根里的爆仓金额，
+ * 那个时候还没有开始记录则返回 null。
+ */
+export interface FlowSeries {
+  openInterest: ReadonlyMap<number, number>;
+  liquidations: (candleTime: number) => LiquidationSum | null;
+}
 type Place = "main" | "volume" | SubPaneId;
 
 interface Spec {
@@ -46,14 +61,16 @@ export interface IndicatorItem {
   label: string;
   color: string;
   value: number | null;
-  /** 数值代表涨跌方向时（MACD 的柱子），按正负着色而不是用固定颜色 */
-  signed?: boolean;
+  /** 不用固定颜色时的着色方式：signed 按数值正负，up、down 固定为涨色、跌色 */
+  tone?: "signed" | "up" | "down";
 }
 
 export interface IndicatorPaneValues {
   id: SubPaneId;
   title: string;
-  /** 这个副图里的数值显示几位小数 */
+  /** 数值怎么显示：price 按小数位数，compact 用万、亿缩写，usd 再加上美元符号 */
+  format: "price" | "compact" | "usd";
+  /** format 为 price 时显示几位小数 */
   digits: number;
   items: IndicatorItem[];
 }
@@ -66,7 +83,18 @@ export interface IndicatorValues {
 }
 
 const MAIN_PANE_STRETCH = 3;
-const EMPTY_CONFIG: IndicatorConfig = { ma: [], ema: [], boll: null, volMa: [], macd: null, kdj: null, rsi: null };
+const EMPTY_CONFIG: IndicatorConfig = {
+  ma: [],
+  ema: [],
+  boll: null,
+  volMa: [],
+  macd: null,
+  kdj: null,
+  rsi: null,
+  cvd: false,
+  openInterest: false,
+  liquidations: false,
+};
 
 function priceFormat(precision: number) {
   return { type: "price" as const, precision, minMove: 1 / 10 ** precision };
@@ -109,6 +137,15 @@ function specsOf(config: IndicatorConfig): Spec[] {
   if (config.rsi !== null) {
     specs.push({ key: "rsi", place: "rsi", kind: "line", label: "RSI", color: RSI_COLOR });
   }
+  if (config.cvd) specs.push({ key: "cvd", place: "cvd", kind: "line", label: "CVD", color: CVD_COLOR });
+  if (config.openInterest) {
+    specs.push({ key: "oi", place: "oi", kind: "line", label: "持仓量", color: OPEN_INTEREST_COLOR });
+  }
+  if (config.liquidations) {
+    // 多单爆仓画在零线下方，空单爆仓画在上方
+    specs.push({ key: "liq:long", place: "liq", kind: "histogram", label: "多单", color: "#8b929d" });
+    specs.push({ key: "liq:short", place: "liq", kind: "histogram", label: "空单", color: "#8b929d" });
+  }
   return specs;
 }
 
@@ -124,6 +161,7 @@ export class IndicatorLayer {
   private precision = 2;
   private readonly series = new Map<string, AnySeries>();
   private data = new Map<string, (number | null)[]>();
+  private flow: FlowSeries | null = null;
 
   constructor(private readonly chart: IChartApi) {}
 
@@ -153,6 +191,11 @@ export class IndicatorLayer {
     this.config = config;
     this.specs = specs;
     this.balancePanes();
+  }
+
+  /** 提供持仓量和爆仓数据。调用后需要再调用 setData 才会画出来。 */
+  setFlow(flow: FlowSeries | null): void {
+    this.flow = flow;
   }
 
   /** 重新计算并写入全部数据 */
@@ -188,28 +231,34 @@ export class IndicatorLayer {
   }
 
   valuesAt(index: number): IndicatorValues {
-    const item = (spec: Spec): IndicatorItem => ({
-      id: spec.key.replace(":", "-"),
-      label: spec.label,
-      color: spec.color,
-      value: this.data.get(spec.key)?.[index] ?? null,
-      signed: spec.kind === "histogram",
-    });
+    const item = (spec: Spec): IndicatorItem => {
+      const value = this.data.get(spec.key)?.[index] ?? null;
+      const base = { id: spec.key.replace(":", "-"), label: spec.label, color: spec.color };
+      if (spec.key === "macd:hist") return { ...base, value, tone: "signed" };
+      // 爆仓金额显示绝对值，颜色表示是哪一边被爆
+      if (spec.key === "liq:long") return { ...base, value: value === null ? null : Math.abs(value), tone: "down" };
+      if (spec.key === "liq:short") return { ...base, value, tone: "up" };
+      return { ...base, value };
+    };
     const at = (place: Place) => this.specs.filter((s) => s.place === place).map(item);
     const panes: IndicatorPaneValues[] = [];
-    const { macd: m, kdj: k, rsi: r } = this.config;
+    const { macd: m, kdj: k, rsi: r, cvd, openInterest, liquidations } = this.config;
     if (m) {
       // 柱子放在最后显示，和常见软件的顺序一致：DIF、DEA、MACD
       const items = at("macd");
       panes.push({
         id: "macd",
         title: `MACD(${m.fast},${m.slow},${m.signal})`,
+        format: "price",
         digits: Math.min(8, this.precision + 1),
         items: [...items.slice(1), items[0]!],
       });
     }
-    if (k) panes.push({ id: "kdj", title: `KDJ(${k.period},${k.k},${k.d})`, digits: 2, items: at("kdj") });
-    if (r !== null) panes.push({ id: "rsi", title: `RSI(${r})`, digits: 2, items: at("rsi") });
+    if (k) panes.push({ id: "kdj", title: `KDJ(${k.period},${k.k},${k.d})`, format: "price", digits: 2, items: at("kdj") });
+    if (r !== null) panes.push({ id: "rsi", title: `RSI(${r})`, format: "price", digits: 2, items: at("rsi") });
+    if (cvd) panes.push({ id: "cvd", title: "CVD 主动买卖累计差", format: "compact", digits: 2, items: at("cvd") });
+    if (openInterest) panes.push({ id: "oi", title: "持仓量", format: "compact", digits: 2, items: at("oi") });
+    if (liquidations) panes.push({ id: "liq", title: "爆仓", format: "usd", digits: 1, items: at("liq") });
     return { main: at("main"), volume: at("volume"), panes };
   }
 
@@ -227,7 +276,8 @@ export class IndicatorLayer {
   }
 
   private formatOf(place: Place) {
-    if (place === "volume") return { type: "volume" as const };
+    // 成交量和资金面的数值很大，用带单位的缩写
+    if (place === "volume" || place === "cvd" || place === "oi" || place === "liq") return { type: "volume" as const };
     if (place === "main") return priceFormat(this.precision);
     // 小数位比价格多一位，低价币的 MACD 数值很小
     if (place === "macd") return priceFormat(Math.min(8, this.precision + 1));
@@ -281,7 +331,9 @@ export class IndicatorLayer {
 
   private point(spec: Spec, time: UTCTimestamp, value: number) {
     if (spec.kind !== "histogram") return { time, value };
-    return { time, value, color: alpha(value >= 0 ? this.colors.up : this.colors.down, 0.7) };
+    // 多单爆仓是被迫卖出，用跌色；空单爆仓是被迫买入，用涨色；MACD 的柱子按正负
+    const up = spec.key === "liq:long" ? false : spec.key === "liq:short" ? true : value >= 0;
+    return { time, value, color: alpha(up ? this.colors.up : this.colors.down, 0.7) };
   }
 
   private compute(candles: readonly Candle[]): void {
@@ -313,6 +365,18 @@ export class IndicatorLayer {
       data.set("kdj:j", points.map((x) => x.j));
     }
     if (r !== null) data.set("rsi", rsi(closes, r));
+
+    const flow = this.flow;
+    if (this.config.cvd) data.set("cvd", cumulativeDelta(candles));
+    if (this.config.openInterest) {
+      data.set("oi", candles.map((c) => flow?.openInterest.get(c.time) ?? null));
+    }
+    if (this.config.liquidations) {
+      const sums = candles.map((c) => flow?.liquidations(c.time) ?? null);
+      // 没有爆仓的 K 线不画柱子
+      data.set("liq:long", sums.map((x) => (x && x.long > 0 ? -x.long : null)));
+      data.set("liq:short", sums.map((x) => (x && x.short > 0 ? x.short : null)));
+    }
     this.data = data;
   }
 

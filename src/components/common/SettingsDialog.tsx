@@ -36,6 +36,9 @@ export function SettingsDialog() {
   const liquidationMinUsd = usePreferencesStore((s) => s.liquidationMinUsd);
   const moveThresholdPct = usePreferencesStore((s) => s.moveThresholdPct);
   const update = usePreferencesStore((s) => s.update);
+  const bigTradeAlerts = usePreferencesStore((s) => s.bigTradeAlerts);
+  const flowPatternAlerts = usePreferencesStore((s) => s.flowPatternAlerts);
+  const bigTradeMinUsd = usePreferencesStore((s) => s.bigTradeMinUsd);
   const maPeriods = usePreferencesStore((s) => s.maPeriods);
   const emaPeriods = usePreferencesStore((s) => s.emaPeriods);
   const volMaPeriods = usePreferencesStore((s) => s.volMaPeriods);
@@ -115,6 +118,59 @@ export function SettingsDialog() {
           %
         </span>
       </label>
+
+      <h3 className="dialog__section">加密货币资金面</h3>
+
+      <div className="field">
+        <span className="field__label">
+          大单提醒
+          <span className="field__hint">大额的主动买入、主动卖出显示在市场异动里</span>
+        </span>
+        <div className="field__control segmented" role="group" aria-label="大单提醒">
+          <button type="button" aria-pressed={bigTradeAlerts} onClick={() => update({ bigTradeAlerts: true })}>
+            开
+          </button>
+          <button type="button" aria-pressed={!bigTradeAlerts} onClick={() => update({ bigTradeAlerts: false })}>
+            关
+          </button>
+        </div>
+      </div>
+
+      <label className="field">
+        <span className="field__label">
+          大单门槛
+          <span className="field__hint">
+            填 0 表示自动：每个币按自己 24 小时成交额的万分之二算，最低 10 万美元
+          </span>
+        </span>
+        <span className="field__control">
+          <input
+            className="input"
+            type="number"
+            min={0}
+            step={50000}
+            data-testid="big-trade-min"
+            value={bigTradeMinUsd}
+            onChange={(e) => update({ bigTradeMinUsd: clamp(e.target.valueAsNumber, 0, 1e9, 0) })}
+          />
+          美元
+        </span>
+      </label>
+
+      <div className="field">
+        <span className="field__label">
+          吸收形态提示
+          <span className="field__hint">砸盘但跌不动、集中爆仓后收回这类情况，显示在市场异动里</span>
+        </span>
+        <div className="field__control segmented" role="group" aria-label="吸收形态提示">
+          <button type="button" aria-pressed={flowPatternAlerts} onClick={() => update({ flowPatternAlerts: true })}>
+            开
+          </button>
+          <button type="button" aria-pressed={!flowPatternAlerts} onClick={() => update({ flowPatternAlerts: false })}>
+            关
+          </button>
+        </div>
+      </div>
 
       <h3 className="dialog__section">指标参数</h3>
 

@@ -65,6 +65,7 @@ export const STORAGE_KEYS = {
   drawings: "mc.drawings.v1",
   feed: "mc.feed.v1",
   watchlist: "mc.watchlist.v1",
+  flow: "mc.flow.v1",
 } as const;
 
 export function clearAllStored(store: KeyValueStore | null = defaultStore()): void {
