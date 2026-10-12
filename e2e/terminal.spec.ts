@@ -226,6 +226,63 @@ test.describe("周线和月线", () => {
   });
 });
 
+test.describe("多图十字光标联动", () => {
+  test("在一张图上移动鼠标，另一张图的数值跟到同一时刻；移开后恢复", async ({ page }) => {
+    test.skip((page.viewportSize()?.width ?? 0) < 760, "手机宽度下多图是上下排列的，单独验证意义不大");
+    await open(page);
+    await page.getByTestId("layout-2").click();
+    const left = page.getByTestId("pane-0");
+    const right = page.getByTestId("pane-1");
+    await expect(left).toHaveAttribute("data-phase", "ready");
+    await expect(right).toHaveAttribute("data-phase", "ready");
+    const rightLegend = right.getByTestId("legend");
+    const leftLegend = left.getByTestId("legend");
+    await expect(rightLegend).toContainText("收");
+
+    // 先把鼠标放到别处，记下两张图各自"最新一根"的数值
+    await page.getByTestId("top-tabs").hover();
+    const rightLatest = await rightLegend.textContent();
+    const leftLatest = await leftLegend.textContent();
+
+    const box = (await left.boundingBox())!;
+    await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.5);
+    await expect(leftLegend).not.toHaveText(leftLatest ?? "");
+    await expect(rightLegend).not.toHaveText(rightLatest ?? "");
+    const rightAtFirst = await rightLegend.textContent();
+
+    // 换一个位置，右图跟着变
+    await page.mouse.move(box.x + box.width * 0.55, box.y + box.height * 0.5);
+    await expect(rightLegend).not.toHaveText(rightAtFirst ?? "");
+    await expect(rightLegend).not.toHaveText(rightLatest ?? "");
+
+    // 移出图表，两张图都回到最新一根
+    await page.getByTestId("top-tabs").hover();
+    await expect(leftLegend).toContainText("收");
+    await expect(rightLegend).toHaveText(/MA7 [\d,.]+/);
+    const num = (text: string | null) => (text ?? "").match(/开([\d,.]+)/)?.[1];
+    await expect.poll(async () => num(await rightLegend.textContent())).toBe(num(rightLatest));
+  });
+
+  test("反方向也联动，且单图布局下不受影响", async ({ page }) => {
+    test.skip((page.viewportSize()?.width ?? 0) < 760, "同上");
+    await open(page);
+    await page.getByTestId("layout-2").click();
+    const left = page.getByTestId("pane-0");
+    const right = page.getByTestId("pane-1");
+    await expect(right).toHaveAttribute("data-phase", "ready");
+    await page.getByTestId("top-tabs").hover();
+    const leftLatest = await left.getByTestId("legend").textContent();
+
+    const box = (await right.boundingBox())!;
+    await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.5);
+    await expect(left.getByTestId("legend")).not.toHaveText(leftLatest ?? "");
+
+    await page.getByTestId("layout-1").click();
+    await expect(page.locator('[data-testid^="pane-"]')).toHaveCount(1);
+    await expect(page.getByTestId("pane-0")).toHaveAttribute("data-phase", "ready");
+  });
+});
+
 test.describe("绘图", () => {
   test("画一条水平线，刷新后仍在", async ({ page }) => {
     await open(page);

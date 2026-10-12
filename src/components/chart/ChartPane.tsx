@@ -43,6 +43,7 @@ import {
   type Timeframe,
 } from "@/types/market";
 import { screenshotRegistry, type ChartBridge, type OverlayPainter } from "./bridge";
+import { barIndexAt, publishCrosshair, subscribeCrosshair } from "./crosshair-sync";
 import {
   FONT_FAMILY,
   applySeriesStyle,
@@ -167,6 +168,7 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
     const container = containerRef.current;
     if (!container) return;
     const L = live.current;
+    const index_ = index;
     const chart = createChart(container, chartOptions());
     chartRef.current = chart;
 
@@ -207,16 +209,47 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
     };
     showRef.current = show;
 
+    // 这个回调有三种来源：用户的鼠标移动（带 sourceEvent）、其他面板联动过来的位置（不带）、
+    // 以及光标被清除（没有坐标）。只有第一种需要广播给其他面板，否则会来回触发。
+    let userHovering = false;
     const onCrosshair = (param: MouseEventParams) => {
       const index = param.point && param.logical !== undefined ? Math.round(param.logical) : -1;
-      if (!candlesRef.current[index]) {
+      const candle = candlesRef.current[index];
+      if (!candle) {
         L.hovering = false;
         show(null);
+        if (userHovering) {
+          userHovering = false;
+          publishCrosshair({ source: index_, time: null });
+        }
         return;
       }
       L.hovering = true;
       show(index);
+      if (param.sourceEvent) {
+        userHovering = true;
+        publishCrosshair({ source: index_, time: candle.time });
+      }
     };
+
+    // 其他面板的十字光标移动时，把本面板的光标放到同一时刻
+    const offSync = subscribeCrosshair((event) => {
+      if (event.source === index_) return;
+      const main = mainRef.current;
+      const at = event.time === null ? -1 : barIndexAt(candlesRef.current, event.time, L.stepSeconds);
+      const candle = candlesRef.current[at];
+      if (!main || !candle) {
+        chart.clearCrosshairPosition();
+        // 清除光标不一定会触发上面的回调，这里直接把图例恢复到最新一根
+        L.hovering = false;
+        show(null);
+        return;
+      }
+      chart.setCrosshairPosition(candle.close, (candle.time + L.offset) as Time, main);
+      // 联动过来的位置不一定会触发上面的回调，这里直接把图例更新到这一根
+      L.hovering = true;
+      show(at);
+    });
 
     const onRange = (range: LogicalRange | null) => {
       setAtLatest(chart.timeScale().scrollPosition() > -3);
@@ -260,6 +293,7 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
 
     return () => {
       screenshotRegistry.delete(index);
+      offSync();
       chart.unsubscribeCrosshairMove(onCrosshair);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange);
       listeners.clear();
