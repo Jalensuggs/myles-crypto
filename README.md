@@ -143,7 +143,9 @@ npm run dev:mock
 
 浏览器不能直接访问 Yahoo（它不允许跨域），所以页面请求的是本站的 `/yahoo/...`，由服务器转给 `https://query1.finance.yahoo.com`。本机运行 `npm run dev` 或 `npm run preview` 时已经配好（见 `vite.config.ts`）。
 
-部署成静态网站时需要在服务器上加一条等价的规则。以 Caddy 为例：
+**部署到 Vercel**：不需要额外配置。仓库里的 `vercel.json` 会把 `/yahoo/...` 交给 `api/yahoo.ts` 这个函数去转发。因为线上地址任何人都能访问，这个函数只放行本应用实际会发出的那一种请求（某只股票的图表数据，周期和范围限定在固定的几个取值内），其余一律拒绝，规则在 `src/data/stock/proxy-rules.ts`。
+
+**部署到自己的服务器**：需要加一条等价的规则。以 Caddy 为例：
 
 ```caddy
 handle_path /yahoo/* {
