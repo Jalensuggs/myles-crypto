@@ -579,6 +579,20 @@ input {
   white-space: nowrap;
 }
 
+.pane__flow-note {
+  position: absolute;
+  left: 10px;
+  bottom: 34px;
+  z-index: 4;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--line-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  pointer-events: none;
+}
+
 .pane__loading {
   position: absolute;
   left: 0;

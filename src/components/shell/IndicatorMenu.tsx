@@ -38,8 +38,8 @@ const GROUPS: { title: string; items: Item[] }[] = [
     title: "资金面（仅加密货币）",
     items: [
       { id: "cvd", key: "indicatorCvd", label: "CVD 主动买卖差", hint: () => "累计" },
-      { id: "oi", key: "indicatorOi", label: "持仓量", hint: () => "仅合约" },
-      { id: "liq", key: "indicatorLiq", label: "爆仓量", hint: () => "仅合约" },
+      { id: "oi", key: "indicatorOi", label: "持仓量", hint: () => "合约数据" },
+      { id: "liq", key: "indicatorLiq", label: "爆仓量", hint: () => "合约数据" },
     ],
   },
 ];

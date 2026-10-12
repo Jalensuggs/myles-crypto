@@ -40,14 +40,29 @@ export function FlowStreams() {
     return [...seen.entries()];
   }, [tabs]);
 
+  // 爆仓来自合约。同一个币的现货和合约标签可能同时开着，按币种去重，每个币只记一份。
+  const symbols = useMemo(() => [...new Set(markets.map(([, market]) => market.symbol))], [markets]);
+
   return (
     <>
       {markets.map(([key, market]) => (
         <FlowStream key={key} market={market.market} symbol={market.symbol} />
       ))}
+      {symbols.map((symbol) => (
+        <LiquidationRecorder key={symbol} symbol={symbol} />
+      ))}
     </>
   );
 }
+
+/** 把这个币的每一笔合约爆仓记下来（不管大小），供爆仓量副图和形态识别使用 */
+const LiquidationRecorder = memo(function LiquidationRecorder({ symbol }: { symbol: string }) {
+  useEffect(
+    () => provider.subscribeLiquidations(symbol, (liq) => useFlowStore.getState().addLiquidation(liq)),
+    [symbol],
+  );
+  return null;
+});
 
 const FlowStream = memo(function FlowStream({ market, symbol }: { market: MarketKind; symbol: string }) {
   useEffect(() => {

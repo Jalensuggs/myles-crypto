@@ -1,7 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import type { Candle, CandlePage, MarketRef, Timeframe } from "@/types/market";
 import { marketKey } from "@/types/market";
-import { BinanceProvider } from "./binance/provider";
+import { BinanceProvider, HttpError } from "./binance/provider";
 import { MockProvider } from "./mock/provider";
 import type { MarketDataProvider } from "./provider";
 
@@ -60,4 +60,24 @@ export function fetchOfficialHistory(
       retry: 0,
     })
     .catch(() => null);
+}
+
+/**
+ * 这个币有没有对应的永续合约。持仓量和爆仓只有合约才有，现货图表上要先确认一下。
+ * 只有交易所明确回答"没有这个标的"时才返回 false；网络出错时按"有"处理，免得误报。
+ */
+export function hasPerpContract(symbol: string): Promise<boolean> {
+  return queryClient.fetchQuery({
+    queryKey: ["perp-exists", symbol],
+    queryFn: async ({ signal }) => {
+      try {
+        await provider.getOpenInterest(symbol, signal);
+        return true;
+      } catch (error) {
+        return !(error instanceof HttpError && error.status === 400);
+      }
+    },
+    staleTime: 60 * 60_000,
+    retry: 0,
+  });
 }

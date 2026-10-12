@@ -1370,21 +1370,23 @@ test.describe("加密货币资金面", () => {
     }
   });
 
-  test("合约上三个副图都有；现货只有 CVD；美股一个都没有", async ({ page }) => {
+  test("合约和现货都能看到三个副图，现货上注明是合约的数据；美股一个都没有", async ({ page }) => {
     await open(page);
     await enable(page, "cvd", "oi", "liq");
     const pane = page.getByTestId("pane-0");
 
-    // 默认标签是比特币现货：只有 CVD
+    // 默认标签是比特币现货：持仓量和爆仓用的是同一个币的合约数据，标题里注明
     await expect(page.getByTestId("indicator-label-cvd")).toHaveText(/CVD 主动买卖累计差\s*-?[\d,.万亿]+/);
-    await expect(page.getByTestId("indicator-label-oi")).toHaveCount(0);
-    await expect(page.getByTestId("indicator-label-liq")).toHaveCount(0);
+    await expect(page.getByTestId("indicator-label-oi")).toHaveText(/持仓量（合约）\s*[\d,.万亿]+/);
+    await expect(page.getByTestId("indicator-label-liq")).toContainText("爆仓（合约）");
+    await expect(page.getByTestId("flow-note")).toHaveCount(0);
 
-    // 以太坊合约：三个都有
+    // 以太坊合约：三个都有，不需要注明
     await page.getByRole("button", { name: "切换到 ETHUSDT.P" }).click();
     await expect(pane).toHaveAttribute("data-phase", "ready");
     await expect(page.getByTestId("indicator-label-cvd")).toBeVisible();
     await expect(page.getByTestId("indicator-label-oi")).toHaveText(/持仓量\s*[\d,.万亿]+/);
+    await expect(page.getByTestId("indicator-label-oi")).not.toContainText("合约");
     await expect(page.getByTestId("indicator-label-liq")).toContainText("爆仓");
 
     // 苹果：资金面只做加密货币
@@ -1392,7 +1394,18 @@ test.describe("加密货币资金面", () => {
     await expect(pane).toHaveAttribute("data-symbol", "AAPL");
     await expect(pane).toHaveAttribute("data-phase", "ready");
     for (const id of ["cvd", "oi", "liq"]) await expect(page.getByTestId(`indicator-label-${id}`)).toHaveCount(0);
+    await expect(page.getByTestId("flow-note")).toHaveCount(0);
     await expect(page.getByTestId("legend-ma-7")).toBeVisible();
+  });
+
+  test("现货图表上的爆仓量同样会累计", async ({ page }) => {
+    await open(page);
+    await enable(page, "liq");
+    await page.getByTestId("tf-15m").click();
+    await page.getByTestId("top-tabs").hover();
+    await expect(page.getByTestId("indicator-label-liq")).toHaveText(/爆仓（合约）.*(多单|空单) \$[\d,.万亿]+/, {
+      timeout: 40_000,
+    });
   });
 
   test("持仓量在 1 分钟和周线上没有数据，副图不显示；换回支持的周期又出现", async ({ page }) => {
@@ -1400,13 +1413,17 @@ test.describe("加密货币资金面", () => {
     await page.getByRole("button", { name: "切换到 ETHUSDT.P" }).click();
     await enable(page, "oi");
     await expect(page.getByTestId("indicator-label-oi")).toBeVisible();
+    await expect(page.getByTestId("flow-note")).toHaveCount(0);
     for (const tf of ["1m", "1w"]) {
       await page.getByTestId(`tf-${tf}`).click();
       await expect(page.getByTestId("pane-0")).toHaveAttribute("data-phase", "ready");
       await expect(page.getByTestId("indicator-label-oi")).toHaveCount(0);
+      // 图上说明为什么没有
+      await expect(page.getByTestId("flow-note")).toContainText("持仓量在 1 分、1 周、1 月这三个周期没有数据");
     }
     await page.getByTestId("tf-1h").click();
     await expect(page.getByTestId("indicator-label-oi")).toHaveText(/持仓量\s*[\d,.万亿]+/);
+    await expect(page.getByTestId("flow-note")).toHaveCount(0);
   });
 
   test("爆仓量从打开页面起累计，出现爆仓后副图里有数值", async ({ page }) => {

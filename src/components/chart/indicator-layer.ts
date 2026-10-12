@@ -41,6 +41,8 @@ export const SUB_PANES: SubPaneId[] = ["macd", "kdj", "rsi", "cvd", "oi", "liq"]
  * 那个时候还没有开始记录则返回 null。
  */
 export interface FlowSeries {
+  /** 这些数据不是来自图表本身的市场时，标题里要注明的来源，例如"合约" */
+  note?: string;
   openInterest: ReadonlyMap<number, number>;
   liquidations: (candleTime: number) => LiquidationSum | null;
 }
@@ -257,8 +259,9 @@ export class IndicatorLayer {
     if (k) panes.push({ id: "kdj", title: `KDJ(${k.period},${k.k},${k.d})`, format: "price", digits: 2, items: at("kdj") });
     if (r !== null) panes.push({ id: "rsi", title: `RSI(${r})`, format: "price", digits: 2, items: at("rsi") });
     if (cvd) panes.push({ id: "cvd", title: "CVD 主动买卖累计差", format: "compact", digits: 2, items: at("cvd") });
-    if (openInterest) panes.push({ id: "oi", title: "持仓量", format: "compact", digits: 2, items: at("oi") });
-    if (liquidations) panes.push({ id: "liq", title: "爆仓", format: "usd", digits: 1, items: at("liq") });
+    const from = this.flow?.note ? `（${this.flow.note}）` : "";
+    if (openInterest) panes.push({ id: "oi", title: `持仓量${from}`, format: "compact", digits: 2, items: at("oi") });
+    if (liquidations) panes.push({ id: "liq", title: `爆仓${from}`, format: "usd", digits: 1, items: at("liq") });
     return { main: at("main"), volume: at("volume"), panes };
   }
 

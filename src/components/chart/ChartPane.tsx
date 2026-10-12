@@ -12,7 +12,7 @@ import {
 import { ChevronsRight } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { DrawingLayer } from "@/components/drawing/DrawingLayer";
-import { fetchCandlePage, fetchOfficialHistory, provider } from "@/data";
+import { fetchCandlePage, fetchOfficialHistory, hasPerpContract, provider } from "@/data";
 import { KLINE_PAGE_SIZE, supportsOpenInterestHistory } from "@/data/binance/endpoints";
 import { describeError } from "@/data/binance/provider";
 import { loadLatest, loadOlder, type LoaderOptions, type PageFetcher } from "@/data/candle-loader";
@@ -114,9 +114,31 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
   // 资金面的三个副图只对加密货币有效：持仓量和爆仓只有合约才有，持仓量历史还受周期限制
   const baseIndicatorConfig = useIndicatorConfig();
   const isCrypto = categoryOf(market) === "crypto";
-  const isCryptoPerp = isCrypto && market.market === "perp";
-  const showOpenInterest = baseIndicatorConfig.openInterest && isCryptoPerp && supportsOpenInterestHistory(timeframe);
-  const showLiquidations = baseIndicatorConfig.liquidations && isCryptoPerp;
+  const isSpot = market.market === "spot";
+  const wantsOpenInterest = baseIndicatorConfig.openInterest && isCrypto;
+  const wantsLiquidations = baseIndicatorConfig.liquidations && isCrypto;
+  // 持仓量和爆仓来自合约。现货图表上显示的是同一个币的合约数据，前提是这个币有合约。
+  const [perpMissing, setPerpMissing] = useState(false);
+  useEffect(() => {
+    setPerpMissing(false);
+    if (!isSpot || !(wantsOpenInterest || wantsLiquidations)) return;
+    let active = true;
+    void hasPerpContract(market.symbol).then((exists) => {
+      if (active) setPerpMissing(!exists);
+    });
+    return () => {
+      active = false;
+    };
+  }, [isSpot, market.symbol, wantsOpenInterest, wantsLiquidations]);
+  const oiSupported = supportsOpenInterestHistory(timeframe);
+  const showOpenInterest = wantsOpenInterest && oiSupported && !perpMissing;
+  const showLiquidations = wantsLiquidations && !perpMissing;
+  // 开了却没法显示时，在图上说明原因，免得以为是坏了
+  const flowNote = perpMissing
+    ? "这个币没有合约，所以没有持仓量和爆仓量"
+    : wantsOpenInterest && !oiSupported
+      ? "持仓量在 1 分、1 周、1 月这三个周期没有数据"
+      : null;
   const indicatorConfig = useMemo(
     () => ({
       ...baseIndicatorConfig,
@@ -375,6 +397,8 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
     };
 
     layer.setFlow({
+      // 现货图表上要注明这两项是合约的数据
+      note: isSpot ? "合约" : undefined,
       openInterest,
       liquidations: (candleTime) => {
         const buckets = useFlowStore.getState().liquidations[symbol];
@@ -436,7 +460,7 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
     };
     // market 的内容由 key 唯一确定
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, timeframe, showOpenInterest, showLiquidations]);
+  }, [key, timeframe, isSpot, showOpenInterest, showLiquidations]);
 
   // ── 数据：标的或周期变化时重新加载并订阅 ──
   useEffect(() => {
@@ -748,6 +772,11 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
         </div>
       )}
       {phase === "ready" && !hasData && <div className="pane__notice">这个标的暂时没有 K 线数据</div>}
+      {flowNote && (
+        <div className="pane__flow-note" data-testid="flow-note" role="note">
+          {flowNote}
+        </div>
+      )}
 
       {!atLatest && hasData && (
         <button
