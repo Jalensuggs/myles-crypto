@@ -38,6 +38,23 @@ function clean(text: string): string[] {
     .filter((line) => line.length > 0);
 }
 
+/**
+ * 一句话说清这笔交易现在该怎么办。
+ * 模型给的入场价常常不是现价——"等反弹到 990 再做空"这种，
+ * 光看一个"做空"标签会让人以为现在就该卖。
+ */
+function timingText(verdict: Verdict, price: number, precision: number): string {
+  const long = verdict.direction === "long";
+  const action = long ? "买入" : "卖出";
+  if (verdict.timing === "now") {
+    return `现价 ${formatPrice(price, precision)} 附近就可以${action}`;
+  }
+  const up = verdict.entryGapPct > 0;
+  return `现在先别动：等价格${up ? "涨" : "跌"}到 ${formatPrice(verdict.entry, precision)}（${
+    up ? "比现价高" : "比现价低"
+  } ${Math.abs(verdict.entryGapPct).toFixed(1)}%）再${action}`;
+}
+
 function riskReward(verdict: Verdict): number | null {
   const risk = Math.abs(verdict.entry - verdict.stop);
   const reward = Math.abs(verdict.targets[0]! - verdict.entry);
@@ -276,6 +293,11 @@ export function AiPanel() {
                 <strong>{DIRECTION_LABELS[verdict.direction]}</strong>
                 <span className="ai__confidence">把握 {Math.round(verdict.confidence)}%</span>
               </div>
+              {verdict.direction !== "none" && (
+                <p className="ai__timing" data-testid="ai-timing">
+                  {timingText(verdict, result.price, result.precision)}
+                </p>
+              )}
               <dl className="ai__levels">
                 <dt>入场</dt>
                 <dd data-testid="ai-entry">{formatPrice(verdict.entry, result.precision)}</dd>
@@ -299,7 +321,9 @@ export function AiPanel() {
                 )}
               </dl>
               {verdict.invalidation && <p className="ai__invalid">看错的信号：{verdict.invalidation}</p>}
-              {drawLines && <p className="ai__drawn">这三个价位已经画到图上</p>}
+              {drawLines && verdict.direction !== "none" && (
+                <p className="ai__drawn">这三个价位已经画到图上</p>
+              )}
             </div>
           )}
 

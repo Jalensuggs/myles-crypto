@@ -1053,7 +1053,7 @@ input {
 .ai__verdict[data-direction="short"] {
   border-left-color: var(--down);
 }
-.ai__verdict[data-direction="wait"] {
+.ai__verdict[data-direction="none"] {
   border-left-color: var(--text-muted);
 }
 .ai__call {
@@ -1089,6 +1089,12 @@ input {
 .ai__levels dd {
   margin: 0;
   font-variant-numeric: tabular-nums;
+}
+.ai__timing {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-primary);
 }
 .ai__invalid,
 .ai__drawn {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractJson, parseAnalysis } from "./verdict";
+import { extractJson, parseAnalysis, sideOf } from "./verdict";
 
 const good = {
   direction: "long",
@@ -84,9 +84,53 @@ describe("parseAnalysis", () => {
     expect(result.text).toContain("走势：上升。");
   });
 
-  it("观望时不检查方向一致性，但仍检查价格范围", () => {
-    const result = parseAnalysis(reply({ ...good, direction: "wait", stop: 104 }), 100);
-    expect(result.verdict?.direction).toBe("wait");
+  it("模型说 wait 但价位是一套做空计划时，按做空显示", () => {
+    // 这是 MU 日线上真实出现过的一次：现价 926，模型说"观望"，
+    // 可它给的是入场 990、止损 1039、目标 853 和 892，分明是在讲做空。
+    const mu = { ...good, direction: "wait", entry: 990.3, stop: 1039.5, targets: [853.66, 892.91] };
+    const result = parseAnalysis(reply(mu), 926.11);
+    expect(result.verdict?.direction).toBe("short");
+    expect(result.verdict?.timing).toBe("wait");
+    expect(result.verdict?.entryGapPct).toBeCloseTo(6.93, 1);
     expect(result.issues).toEqual([]);
+  });
+
+  it("入场价就在现价附近时算现在就能进", () => {
+    const result = parseAnalysis(reply({ ...good, entry: 100.2 }), 100);
+    expect(result.verdict?.timing).toBe("now");
+    expect(result.verdict?.entryGapPct).toBeCloseTo(0.2, 2);
+  });
+
+  it("止损和目标在同一侧时看不出方向，标成没有可做的并提示", () => {
+    const muddled = { ...good, direction: "wait", entry: 100, stop: 96, targets: [94] };
+    const result = parseAnalysis(reply(muddled), 100);
+    expect(result.verdict?.direction).toBe("none");
+    expect(result.issues.join()).toContain("看不出模型想做多还是做空");
+  });
+
+  it("模型自己说了方向就按它说的来", () => {
+    expect(parseAnalysis(reply(good), 100).verdict?.direction).toBe("long");
+    const short = { ...good, direction: "short", stop: 104, targets: [92] };
+    expect(parseAnalysis(reply(short), 100).verdict?.direction).toBe("short");
+    expect(parseAnalysis(reply({ ...good, direction: "none" }), 100).verdict?.direction).toBe("long");
+  });
+});
+
+describe("sideOf", () => {
+  it("止损在下、目标在上是做多", () => {
+    expect(sideOf(100, 96, [108])).toBe("long");
+  });
+
+  it("止损在上、目标在下是做空", () => {
+    expect(sideOf(990.3, 1039.5, [853.66])).toBe("short");
+  });
+
+  it("止损和目标在同一侧时判断不出来", () => {
+    expect(sideOf(100, 96, [94])).toBeNull();
+    expect(sideOf(100, 104, [108])).toBeNull();
+  });
+
+  it("没有目标价时判断不出来", () => {
+    expect(sideOf(100, 96, [])).toBeNull();
   });
 });

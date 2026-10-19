@@ -376,7 +376,7 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
     const series = mainRef.current;
     const verdict = aiResult?.verdict;
     // 只画给当前这个周期的结论，换了周期就不显示了，免得对不上
-    if (!series || !aiLines || !verdict || aiResult.timeframe !== timeframe) return;
+    if (!series || !aiLines || !verdict || verdict.direction === "none" || aiResult.timeframe !== timeframe) return;
 
     const style = { lineWidth: 1 as const, lineStyle: LineStyle.Dashed, axisLabelVisible: true };
     const lines = [

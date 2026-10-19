@@ -9,17 +9,24 @@
  */
 import { z } from "zod";
 
-export const DIRECTIONS = ["long", "short", "wait"] as const;
+export const DIRECTIONS = ["long", "short", "none"] as const;
+/** 看多、看空，或者这张图根本不值得做 */
 export type Direction = (typeof DIRECTIONS)[number];
 
 export const DIRECTION_LABELS: Record<Direction, string> = {
   long: "做多买入",
   short: "做空卖出",
-  wait: "观望",
+  none: "没有可做的",
 };
 
+/** 现在就能进，还是要等价格到某个位置 */
+export type Timing = "now" | "wait";
+
 const verdictSchema = z.object({
-  direction: z.enum(DIRECTIONS),
+  // 早期版本用 wait 表示观望，但它既可能是"不做"，也可能是"等更好的价格再做空"，
+  // 两件事混在一起看不出方向。现在用 none 表示不做，方向总是 long 或 short；
+  // 收到旧的 wait 时按下面的 sideOf 从价位反推真实方向。
+  direction: z.enum(["long", "short", "none", "wait"]),
   entry: z.number().finite().positive(),
   stop: z.number().finite().positive(),
   targets: z.array(z.number().finite().positive()).min(1).max(5),
@@ -28,7 +35,20 @@ const verdictSchema = z.object({
   invalidation: z.string().max(300).default(""),
 });
 
-export type Verdict = z.infer<typeof verdictSchema>;
+export interface Verdict {
+  direction: Direction;
+  /** 入场价。要等价格到某个位置再进的话，这里就是那个位置 */
+  entry: number;
+  stop: number;
+  /** 由近到远 */
+  targets: number[];
+  confidence: number;
+  horizon: string;
+  invalidation: string;
+  timing: Timing;
+  /** 入场价比现价高或低百分之几，正数是高 */
+  entryGapPct: number;
+}
 
 export interface ParsedAnalysis {
   /** 解析成功的结论；模型还没写完或者格式不对时为 null */
@@ -45,6 +65,20 @@ const MAX_ENTRY_DRIFT = 0.2;
 const MAX_LEVEL_DRIFT = 0.5;
 /** 盈亏比低于这个值会提示 */
 const MIN_REWARD_RATIO = 1;
+/** 入场价和现价差距在这个百分比之内，就算"现在就能进" */
+const NOW_GAP_PCT = 0.5;
+
+/**
+ * 从价位反推方向：止损在入场价下方、目标在上方，就是做多；反过来就是做空。
+ * 两边对不上（比如止损和目标在同一侧）时返回 null。
+ */
+export function sideOf(entry: number, stop: number, targets: readonly number[]): Direction | null {
+  const target = targets[0];
+  if (target === undefined) return null;
+  if (stop < entry && target > entry) return "long";
+  if (stop > entry && target < entry) return "short";
+  return null;
+}
 
 /**
  * 从一段文字里取出第一个完整的 JSON 对象。
@@ -114,6 +148,8 @@ function checkLevels(verdict: Verdict, price: number): string[] {
     if (risk > 0 && reward / risk < MIN_REWARD_RATIO) {
       issues.push(`盈亏比只有 ${(reward / risk).toFixed(2)}，赚的不如亏的多`);
     }
+  } else {
+    issues.push("止损和目标价在入场价的同一侧，看不出模型想做多还是做空");
   }
   return issues;
 }
@@ -138,12 +174,24 @@ export function parseAnalysis(raw: string, price: number): ParsedAnalysis {
   const text = stripJson(raw, found.start, found.end);
   if (!parsed.success) return { verdict: null, text, issues: ["模型给出的结论格式不对，只能看下面的文字分析"] };
 
-  const verdict = parsed.data;
+  const raw2 = parsed.data;
+  // 模型说 wait 时方向其实藏在价位里：止损在入场价上方、目标在下方，就是在讲做空。
+  // 直接显示"观望"会把这份计划的方向弄丢，所以从价位把它反推出来。
+  const direction: Direction =
+    raw2.direction === "long" || raw2.direction === "short"
+      ? raw2.direction
+      : (sideOf(raw2.entry, raw2.stop, raw2.targets) ?? "none");
+
   // 目标价按方向由近到远排好，模型有时会倒着写
-  const targets = [...new Set(verdict.targets)].sort((a, b) =>
-    verdict.direction === "short" ? b - a : a - b,
-  );
-  const normalized: Verdict = { ...verdict, targets };
+  const targets = [...new Set(raw2.targets)].sort((a, b) => (direction === "short" ? b - a : a - b));
+  const entryGapPct = price > 0 ? ((raw2.entry - price) / price) * 100 : 0;
+  const normalized: Verdict = {
+    ...raw2,
+    direction,
+    targets,
+    entryGapPct,
+    timing: Math.abs(entryGapPct) <= NOW_GAP_PCT ? "now" : "wait",
+  };
 
   return {
     verdict: normalized,
