@@ -1096,6 +1096,11 @@ input {
   line-height: 1.6;
   color: var(--text-primary);
 }
+.ai__invalid b {
+  display: block;
+  color: var(--warning);
+  font-weight: 600;
+}
 .ai__invalid,
 .ai__drawn {
   margin: 6px 0 0;

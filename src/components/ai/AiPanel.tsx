@@ -320,7 +320,15 @@ export function AiPanel() {
                   </>
                 )}
               </dl>
-              {verdict.invalidation && <p className="ai__invalid">看错的信号：{verdict.invalidation}</p>}
+              {verdict.invalidation && (
+                <p
+                  className="ai__invalid"
+                  title="止损是一个价格，碰到就走；这里是一个情况，看到了就该提前走，通常比止损更早、亏得更少。"
+                >
+                  <b>出现这些就说明看错了：</b>
+                  {verdict.invalidation}
+                </p>
+              )}
               {drawLines && verdict.direction !== "none" && (
                 <p className="ai__drawn">这三个价位已经画到图上</p>
               )}
