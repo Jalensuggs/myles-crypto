@@ -1,5 +1,6 @@
 import {
   HistogramSeries,
+  LineStyle,
   createChart,
   type IChartApi,
   type ISeriesApi,
@@ -27,6 +28,7 @@ import {
 import { matchesContract, mergeOfficial } from "@/features/session/official";
 import { earliestBucketTime, sumLiquidations } from "@/features/flow/liquidation-buckets";
 import { isUsRegularSession } from "@/features/session/us-session";
+import { useAiStore } from "@/stores/ai.store";
 import { useDrawingsStore } from "@/stores/drawings.store";
 import { useFlowStore } from "@/stores/flow.store";
 import { useIndicatorConfig } from "@/stores/indicator-config";
@@ -44,7 +46,7 @@ import {
   type MarketTab,
   type Timeframe,
 } from "@/types/market";
-import { screenshotRegistry, type ChartBridge, type OverlayPainter } from "./bridge";
+import { paneDataRegistry, screenshotRegistry, type ChartBridge, type OverlayPainter } from "./bridge";
 import { barIndexAt, publishCrosshair, subscribeCrosshair } from "./crosshair-sync";
 import {
   FONT_FAMILY,
@@ -111,6 +113,8 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
   const precision = useTickersStore((s) => s.precision[key]) ?? 2;
   const isStock = categoryOf(market) === "stock";
   const sessionOnly = usePreferencesStore((s) => s.stockSessionOnly) && isStock;
+  const aiResult = useAiStore((s) => s.results[key]);
+  const aiLines = usePreferencesStore((s) => s.aiLines);
   // 资金面的三个副图只对加密货币有效：持仓量和爆仓只有合约才有，持仓量历史还受周期限制
   const baseIndicatorConfig = useIndicatorConfig();
   const isCrypto = categoryOf(market) === "crypto";
@@ -340,6 +344,14 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
     };
   }, [index]);
 
+  // 让 AI 分析能读到这个面板上的 K 线
+  useEffect(() => {
+    paneDataRegistry.set(index, { tabId: tab.id, candles: () => candlesRef.current });
+    return () => {
+      paneDataRegistry.delete(index);
+    };
+  }, [index, tab.id]);
+
   // ── 主序列：图表类型变化时重建 ──
   useEffect(() => {
     const chart = chartRef.current;
@@ -358,6 +370,39 @@ export const ChartPane = memo(function ChartPane({ tab, index, focused, multi }:
       if (chartRef.current === chart) chart.removeSeries(series);
     };
   }, [chartType]);
+
+  // ── AI 给出的入场、止损、目标价，画成价格线 ──
+  useEffect(() => {
+    const series = mainRef.current;
+    const verdict = aiResult?.verdict;
+    // 只画给当前这个周期的结论，换了周期就不显示了，免得对不上
+    if (!series || !aiLines || !verdict || aiResult.timeframe !== timeframe) return;
+
+    const style = { lineWidth: 1 as const, lineStyle: LineStyle.Dashed, axisLabelVisible: true };
+    const lines = [
+      series.createPriceLine({ ...style, price: verdict.entry, color: "#4f7cff", title: "入场" }),
+      series.createPriceLine({ ...style, price: verdict.stop, color: "#ff526b", title: "止损" }),
+      ...verdict.targets.map((target, i) =>
+        series.createPriceLine({
+          ...style,
+          price: target,
+          color: "#2edb83",
+          title: verdict.targets.length > 1 ? `目标${i + 1}` : "目标",
+        }),
+      ),
+    ];
+
+    return () => {
+      for (const line of lines) {
+        // 图表或序列已经被销毁时这些线也跟着没了
+        try {
+          series.removePriceLine(line);
+        } catch {
+          break;
+        }
+      }
+    };
+  }, [aiResult, aiLines, timeframe, chartType]);
 
   // ── 颜色与精度 ──
   useEffect(() => {

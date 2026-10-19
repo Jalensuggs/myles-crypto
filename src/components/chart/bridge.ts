@@ -20,3 +20,24 @@ export interface ChartBridge {
 
 /** 以面板序号登记的截图函数，供控制栏调用 */
 export const screenshotRegistry = new Map<number, () => HTMLCanvasElement | null>();
+
+/**
+ * 图表面板当前显示的数据，供 AI 分析取用。
+ * 读的就是图上那一份 K 线（已经过交易时段过滤、官方历史合并），
+ * 所以模型看到的和用户看到的是同一张图。
+ */
+export interface PaneData {
+  tabId: string;
+  candles: () => readonly Candle[];
+}
+
+/** 以面板序号登记 */
+export const paneDataRegistry = new Map<number, PaneData>();
+
+/** 找出某个标签页对应的图表数据 */
+export function paneDataFor(tabId: string): PaneData | undefined {
+  for (const data of paneDataRegistry.values()) {
+    if (data.tabId === tabId) return data;
+  }
+  return undefined;
+}

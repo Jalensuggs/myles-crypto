@@ -149,3 +149,33 @@ export function kdj(
   }
   return out;
 }
+
+/**
+ * 平均真实波幅（ATR），Wilder 平滑。真实波幅取三者中最大的：
+ * 本根的高低差、本根最高与上一根收盘的差、本根最低与上一根收盘的差。
+ * 用来衡量这个标的"正常"波动多大，进而决定止损该放多远。
+ */
+export function atr(
+  bars: readonly { high: number; low: number; close: number }[],
+  period = 14,
+): (number | null)[] {
+  const out: (number | null)[] = new Array(bars.length).fill(null);
+  if (period < 1 || bars.length <= period) return out;
+
+  const ranges: number[] = [];
+  for (let i = 1; i < bars.length; i++) {
+    const prevClose = bars[i - 1]!.close;
+    const bar = bars[i]!;
+    ranges.push(Math.max(bar.high - bar.low, Math.abs(bar.high - prevClose), Math.abs(bar.low - prevClose)));
+  }
+
+  let value = 0;
+  for (let i = 0; i < period; i++) value += ranges[i]!;
+  value /= period;
+  out[period] = value;
+  for (let i = period; i < ranges.length; i++) {
+    value = (value * (period - 1) + ranges[i]!) / period;
+    out[i + 1] = value;
+  }
+  return out;
+}

@@ -30,7 +30,7 @@ export const preferencesSchema = z.object({
   moveThresholdPct: z.number().min(0.1).max(50),
   rightDockOpen: z.boolean(),
   /** 右侧栏下半部分显示哪一页。旧记录里没有这一项时取默认值。 */
-  dockTab: z.enum(["watchlist", "feed"]).default("watchlist"),
+  dockTab: z.enum(["watchlist", "feed", "ai"]).default("watchlist"),
   /** 技术指标开关，对所有图表生效 */
   indicatorMa: z.boolean().default(true),
   indicatorMacd: z.boolean().default(false),
@@ -69,6 +69,12 @@ export const preferencesSchema = z.object({
   /** 新画的线的粗细和虚实 */
   drawingWidth: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(1),
   drawingDash: z.boolean().default(false),
+  /** AI 分析用哪个模型，留空表示用服务端配置的默认模型 */
+  aiModel: z.string().max(48).default(""),
+  /** 模型的思考档位。高档更仔细但要等更久 */
+  aiEffort: z.enum(["low", "high"]).default("low"),
+  /** 把 AI 给的入场、止损、目标价画到图上 */
+  aiLines: z.boolean().default(true),
   /** 美股图表只显示常规交易时段的 K 线 */
   stockSessionOnly: z.boolean().default(true),
   /** 均线周期，最多 4 条 */
@@ -105,6 +111,9 @@ export const DEFAULT_PREFERENCES: Preferences = {
   drawingColor: DEFAULT_DRAWING_COLOR,
   drawingWidth: 1,
   drawingDash: false,
+  aiModel: "",
+  aiEffort: "low",
+  aiLines: true,
   stockSessionOnly: true,
   maPeriods: DEFAULT_MA_PERIODS,
 };

@@ -1,3 +1,4 @@
+import { AiPanel } from "@/components/ai/AiPanel";
 import { EventFeed } from "@/components/feed/EventFeed";
 import { MarketOverview } from "@/components/feed/MarketOverview";
 import { WatchList } from "@/components/feed/WatchList";
@@ -13,7 +14,7 @@ export function RightDock() {
   const eventCount = useFeedStore((s) => s.events.length);
   if (!open) return null;
 
-  const select = (next: "watchlist" | "feed") => usePreferencesStore.getState().update({ dockTab: next });
+  const select = (next: "watchlist" | "feed" | "ai") => usePreferencesStore.getState().update({ dockTab: next });
 
   return (
     <>
@@ -39,10 +40,20 @@ export function RightDock() {
             aria-selected={tab === "feed"}
             onClick={() => select("feed")}
           >
-            市场异动 <span className="muted">{eventCount}</span>
+            异动 <span className="muted">{eventCount}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className="dock__tab"
+            data-testid="dock-tab-ai"
+            aria-selected={tab === "ai"}
+            onClick={() => select("ai")}
+          >
+            AI 信号
           </button>
         </div>
-        {tab === "watchlist" ? <WatchList /> : <EventFeed />}
+        {tab === "watchlist" ? <WatchList /> : tab === "feed" ? <EventFeed /> : <AiPanel />}
       </aside>
     </>
   );

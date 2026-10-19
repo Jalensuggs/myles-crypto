@@ -1,7 +1,9 @@
 import { fileURLToPath, URL } from "node:url";
 import react from "@vitejs/plugin-react";
 import type { ProxyOptions } from "vite";
+import { loadEnv } from "vite";
 import { defineConfig } from "vitest/config";
+import { apiRoutes } from "./dev/api-plugin.ts";
 
 /**
  * 美股的官方历史 K 线来自 Yahoo 财经。它不允许浏览器跨域直接访问，
@@ -29,15 +31,24 @@ const yahooProxy: Record<string, ProxyOptions> = {
   },
 };
 
-export default defineConfig({
-  plugins: [react()],
-  resolve: {
-    alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
-  },
-  server: { proxy: yahooProxy },
-  preview: { proxy: yahooProxy },
-  test: {
-    environment: "node",
-    include: ["src/**/*.test.ts"],
-  },
+export default defineConfig(({ mode }) => {
+  // 模型网关的地址和密钥写在 .env.local 里，只给服务端代码用。
+  // 第三个参数留空表示连没有 VITE_ 前缀的变量也读进来——正因为没有前缀，它们不会被打包进页面。
+  const env = loadEnv(mode, process.cwd(), "");
+  for (const name of ["WORKBUDDY_BASE_URL", "WORKBUDDY_API_KEY", "WORKBUDDY_MODEL"]) {
+    if (process.env[name] === undefined && env[name] !== undefined) process.env[name] = env[name];
+  }
+
+  return {
+    plugins: [react(), apiRoutes()],
+    resolve: {
+      alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
+    },
+    server: { proxy: yahooProxy },
+    preview: { proxy: yahooProxy },
+    test: {
+      environment: "node",
+      include: ["src/**/*.test.ts"],
+    },
+  };
 });

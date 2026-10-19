@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boll, ema, kdj, macd, rsi, sma } from "./calc";
+import { atr, boll, ema, kdj, macd, rsi, sma } from "./calc";
 import { parseBoll, parseEmaPeriods, parseKdj, parseMaPeriods, parseMacd, parseRsiPeriod, parseVolMaPeriods } from "./config";
 
 describe("sma", () => {
@@ -254,5 +254,27 @@ describe("其他参数的解析", () => {
     expect(parseBoll("20, 0")).toBeNull();
     expect(parseBoll("20, 11")).toBeNull();
     expect(parseBoll("1, 2")).toBeNull();
+  });
+});
+
+describe("atr", () => {
+  const bars = (rows: readonly [number, number, number][]) => rows.map(([high, low, close]) => ({ high, low, close }));
+
+  it("前 period 根没有结果，之后是真实波幅的 Wilder 平滑", () => {
+    // 每根都比上一根整体抬高 1，高低差 2，距上一根收盘也是 2，真实波幅恒为 2
+    const rows = Array.from({ length: 6 }, (_, i) => [10 + i + 1, 10 + i - 1, 10 + i] as [number, number, number]);
+    const out = atr(bars(rows), 3);
+    expect(out.slice(0, 3)).toEqual([null, null, null]);
+    for (const value of out.slice(3)) expect(value).toBeCloseTo(2, 6);
+  });
+
+  it("跳空时取与上一根收盘价的差", () => {
+    const out = atr(bars([[10, 9, 10], [30, 29, 30]]), 1);
+    // 第二根：高低差 1，但距上一根收盘差了 20
+    expect(out[1]).toBeCloseTo(20, 6);
+  });
+
+  it("K 线不够时全是 null", () => {
+    expect(atr(bars([[10, 9, 10], [11, 10, 11]]), 14)).toEqual([null, null]);
   });
 });

@@ -55,7 +55,7 @@ test.describe("首屏", () => {
     if (isWide(page)) {
       await expect(page.getByTestId("right-dock")).toBeVisible();
       await expect(page.getByTestId("market-overview")).toContainText("24h 成交额");
-      await expect(page.getByTestId("dock-tab-feed")).toContainText("市场异动");
+      await expect(page.getByTestId("dock-tab-feed")).toContainText("异动");
       await expect(page.getByTestId("watchlist")).toBeVisible();
     } else {
       await expect(page.getByTestId("right-dock")).toHaveCount(0);
@@ -1515,5 +1515,36 @@ test.describe("本地数据损坏", () => {
     await expect(page.getByTestId("tab")).toHaveCount(6);
     await expect(page.locator('[data-testid^="pane-"]')).toHaveCount(1);
     await expect(page.getByTestId("drawing-layer")).toHaveAttribute("data-count", "1");
+  });
+});
+
+test.describe("AI 信号", () => {
+  test("模拟数据模式下不调用模型，面板说明原因", async ({ page }) => {
+    test.skip(!isWide(page), "窄屏里右侧栏是抽屉");
+    const external = trackExternalRequests(page);
+    const calls: string[] = [];
+    page.on("request", (req) => {
+      if (new URL(req.url()).pathname.startsWith("/api/ai")) calls.push(req.url());
+    });
+
+    await open(page);
+    await page.getByTestId("dock-tab-ai").click();
+
+    await expect(page.getByTestId("ai-panel")).toBeVisible();
+    await expect(page.getByTestId("ai-unavailable")).toContainText("模拟数据");
+    await expect(page.getByTestId("ai-run")).toBeDisabled();
+    await expect(page.getByTestId("ai-result")).toHaveCount(0);
+    expect(calls).toEqual([]);
+    expect(external).toEqual([]);
+  });
+
+  test("切换标签时分析按钮跟着换标的", async ({ page }) => {
+    test.skip(!isWide(page), "窄屏里右侧栏是抽屉");
+    await open(page);
+    await page.getByTestId("dock-tab-ai").click();
+    await expect(page.getByTestId("ai-run")).toContainText("分析 BTCUSDT 1日");
+
+    await page.getByTestId("tab").nth(3).locator(".tab__main").click();
+    await expect(page.getByTestId("ai-run")).toContainText("分析 AAPL");
   });
 });
