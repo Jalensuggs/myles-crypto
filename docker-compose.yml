@@ -1,0 +1,18 @@
+services:
+  app:
+    build: .
+    container_name: myles-crypto
+    restart: unless-stopped
+    # 网关地址和密钥在这里，不进镜像
+    env_file: .env
+    # 只绑本机，对外一律走 Caddy 的 HTTPS
+    ports:
+      - "127.0.0.1:3400:3400"
+    # 这台机器内存紧张，给它划个上限，别拖垮别的项目
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3400/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

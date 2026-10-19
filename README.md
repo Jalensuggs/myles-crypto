@@ -192,6 +192,58 @@ handle_path /yahoo/* {
 
 `User-Agent` 这一行不能省：实测带常见浏览器标识的请求经常被限流（返回 429），换成自己的标识就稳定。不想配的话，把环境变量 `VITE_STOCK_HISTORY_BASE` 设为 `off`，美股就只用合约数据。
 
+## 部署到自己的服务器
+
+线上跑在阿里云香港那台机器上：<https://crypto.canvas-myles.me>。
+
+分工是：**静态页面交给 Caddy 直接托管，接口单独跑一个很小的 Node 服务。**
+`api/` 下那两个函数在 Vercel 上由平台直接运行，在自己的服务器上则由 `tooling/server.ts`
+这个小服务转一道交给它们处理——三种环境（本机开发、Vercel、自建服务器）跑的是同一份函数代码。
+
+更新线上版本：
+
+```bash
+bash scripts/deploy-server.sh
+```
+
+脚本做的事：本机编译页面和接口服务 → 打成一个包 → 切成 256 KB 小块逐块上传（这台机器的线路
+整包传经常断）→ 服务器上展开，静态文件放到 `/var/www/crypto`，接口容器重启 → 验证。
+服务器上不联网装任何东西，Docker 构建只有一个 COPY。
+
+服务器上的东西：
+
+| 位置 | 内容 |
+|---|---|
+| `/var/www/crypto` | 编译好的页面，Caddy 直接读 |
+| `~/myles-crypto` | `server.mjs`、Dockerfile、compose、`.env`（网关密钥，权限 600） |
+| `127.0.0.1:3400` | 接口服务，只绑本机，对外一律走 Caddy |
+
+Caddy 的配置（`/etc/caddy/Caddyfile`）：
+
+```caddy
+crypto.canvas-myles.me {
+    handle /api/* {
+        reverse_proxy 127.0.0.1:3400 {
+            # AI 分析是边想边往外吐字的，不能缓冲
+            flush_interval -1
+        }
+    }
+    handle /yahoo/* {
+        reverse_proxy 127.0.0.1:3400
+    }
+    handle {
+        encode zstd gzip
+        root * /var/www/crypto
+        try_files {path} /index.html
+        file_server
+    }
+}
+```
+
+`/yahoo/*` 走接口服务而不是让 Caddy 直接反代到 Yahoo，是因为函数那边有一份白名单
+（`src/data/stock/proxy-rules.ts`），只放行本应用会发出的那一种请求；
+Caddy 直接反代等于开了一个通用代理。
+
 ## 版本记录
 
 项目用 git 做版本管理。`main` 分支是稳定的版本，新功能先在别的分支上做，确认没问题再合并回来。
