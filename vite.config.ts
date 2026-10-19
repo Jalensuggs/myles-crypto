@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import type { ProxyOptions } from "vite";
 import { loadEnv } from "vite";
 import { defineConfig } from "vitest/config";
-import { apiRoutes } from "./dev/api-plugin.ts";
+import { apiRoutes } from "./tooling/api-plugin.ts";
 
 /**
  * 美股的官方历史 K 线来自 Yahoo 财经。它不允许浏览器跨域直接访问，

@@ -27,7 +27,7 @@
     "playwright.config.ts",
     "e2e",
     "api",
-    "dev",
+    "tooling",
     "src/data/stock/proxy-rules.ts",
     "src/features/ai"
   ],

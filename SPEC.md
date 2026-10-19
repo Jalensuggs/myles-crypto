@@ -219,7 +219,7 @@ src/
   types/
   styles/         tokens.css、globals.css
 api/              线上服务端函数（Yahoo 转发、AI 分析），Vercel Edge
-dev/              让 api/ 在本机开发服务器上也能运行的插件
+tooling/          让 api/ 在本机开发服务器上也能运行的插件
 ```
 
 ## 6. 核心类型
