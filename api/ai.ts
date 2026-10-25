@@ -8,7 +8,11 @@ import { buildMessages } from "../src/features/ai/prompt";
  * 密钥只存在服务器的环境变量里，不会出现在页面代码或网络请求里。
  * 本机开发时不走这里，由 tooling/api-plugin.ts 用同一个函数处理。
  */
-export const config = { runtime: "edge" };
+/**
+ * 固定在悉尼节点。Groq 会按 IP 地区封锁，香港和部分亚洲节点一律返回 403；
+ * 不指定的话函数会就近在请求方所在地运行，从香港过来就正好撞在枪口上。
+ */
+export const config = { runtime: "edge", regions: ["syd1"] };
 
 /** 模型从开始思考到吐出第一个字可能要几十秒 */
 const TIMEOUT_MS = 180_000;

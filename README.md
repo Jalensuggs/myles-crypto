@@ -130,6 +130,7 @@ AI_GATEWAY_MODEL=openai/gpt-oss-120b
 - 页面本身不保存密钥：浏览器只把行情快照发给本站的 `/api/ai`，由服务端加上提示词再转给网关（`api/ai.ts`）。
 - 输出额度是"思考 + 正文"一起算的。会推理的模型光想就要几千 token，给少了会出现"想完了但一个字没写"（换网关时在这上面栽过一次），所以上限设在 8000。真碰到这种情况面板会提示换"快"档或换模型。
 - 免费额度有每分钟和每天的上限，用超了面板会提示过一会儿再试。
+- **Groq 按 IP 地区封锁。** 香港那台服务器直接调会被拒（403，换 UA 没用，连 console.groq.com 都打不开），所以线上 `/api/ai` 这一个接口由 Caddy 转给 Vercel 上的同一个函数，函数固定在悉尼节点（`api/ai.ts` 里的 `regions: ["syd1"]`——不指定的话它会就近在香港跑，照样被封）。其余接口仍然走香港本机。
 - 一次只分析一个标的——网关同时能跑的对话很少。
 - 模拟数据模式（`VITE_USE_MOCK_DATA=true`）下不调用模型，那个模式的意义就是完全不访问外网。
 - 模型给的是它的判断，不是事实。价位校验只能挡住明显离谱的，挡不住看错方向。
@@ -219,17 +220,24 @@ bash scripts/deploy-server.sh
 |---|---|
 | `/var/www/crypto` | 编译好的页面，Caddy 直接读 |
 | `~/myles-crypto` | `server.mjs`、Dockerfile、compose、`.env`（网关密钥，权限 600） |
-| `127.0.0.1:3400` | 接口服务，只绑本机，对外一律走 Caddy |
+| `127.0.0.1:3400` | 接口服务（`/yahoo` 转发），只绑本机，对外一律走 Caddy |
+| Vercel 项目 `myles-crypto-ai` | 只用来跑 `/api/ai`，因为 Groq 封香港 IP。独立于公开仓库那个项目，不会被它的部署覆盖 |
 
 Caddy 的配置（`/etc/caddy/Caddyfile`）：
 
 ```caddy
 crypto.canvas-myles.me {
-    handle /api/* {
-        reverse_proxy 127.0.0.1:3400 {
+    # Groq 按 IP 封锁，香港这台机器直接调会被拒（403），
+    # 所以 AI 分析这一个接口转给 Vercel 上固定在悉尼节点的同一个函数。
+    handle /api/ai {
+        reverse_proxy https://myles-crypto-ai.vercel.app {
+            header_up Host myles-crypto-ai.vercel.app
             # AI 分析是边想边往外吐字的，不能缓冲
             flush_interval -1
         }
+    }
+    handle /api/* {
+        reverse_proxy 127.0.0.1:3400
     }
     handle /yahoo/* {
         reverse_proxy 127.0.0.1:3400
