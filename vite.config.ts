@@ -35,7 +35,7 @@ export default defineConfig(({ mode }) => {
   // 模型网关的地址和密钥写在 .env.local 里，只给服务端代码用。
   // 第三个参数留空表示连没有 VITE_ 前缀的变量也读进来——正因为没有前缀，它们不会被打包进页面。
   const env = loadEnv(mode, process.cwd(), "");
-  for (const name of ["WORKBUDDY_BASE_URL", "WORKBUDDY_API_KEY", "WORKBUDDY_MODEL"]) {
+  for (const name of ["AI_GATEWAY_BASE_URL", "AI_GATEWAY_API_KEY", "AI_GATEWAY_MODEL"]) {
     if (process.env[name] === undefined && env[name] !== undefined) process.env[name] = env[name];
   }
 

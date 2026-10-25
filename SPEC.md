@@ -451,7 +451,8 @@ mc.tabs.v1   mc.layout.v1   mc.preferences.v1   mc.drawings.v1   mc.feed.v1   mc
 服务端（`api/ai.ts`）：
 
 - 只接受行情快照，不接受任意消息；`POST` 分析，`GET` 返回模型清单。
-- 密钥从环境变量 `WORKBUDDY_API_KEY` 读，只在服务端用。
+- 网关是任何 OpenAI 兼容的接口，由 `AI_GATEWAY_BASE_URL` / `AI_GATEWAY_API_KEY` / `AI_GATEWAY_MODEL` 三个环境变量指定，换一家不用改代码。密钥只在服务端用。
+- `GET` 返回的模型清单会过滤：只留输出文字、支持对话、上下文够大的，去掉语音转写、语音合成和安全分类模型。
 - 响应先发一个 SSE 心跳再去连上游，避免中间环节按"迟迟没有响应"处理；之后把上游的流原样转发。
 - 上游出错时在流里发 `{"mc_error":"中文说明"}`。
 

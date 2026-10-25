@@ -4,8 +4,9 @@ import { buildMessages } from "../src/features/ai/prompt";
 /**
  * AI 分析的服务端。页面把行情快照发到这里，由这里加上提示词转给模型网关。
  *
- * 网关的密钥只存在服务器的环境变量里，不会出现在页面代码或网络请求里。
- * 本机开发时不走这里，由 dev/api-plugin.ts 用同一个函数处理。
+ * 网关只要是 OpenAI 兼容的接口就行，换一家只用改环境变量。目前用的是 Groq。
+ * 密钥只存在服务器的环境变量里，不会出现在页面代码或网络请求里。
+ * 本机开发时不走这里，由 tooling/api-plugin.ts 用同一个函数处理。
  */
 export const config = { runtime: "edge" };
 
@@ -15,6 +16,15 @@ const TIMEOUT_MS = 180_000;
 const HEARTBEAT_MS = 10_000;
 const MODELS_CACHE_SECONDS = 300;
 
+/** 网关 /models 里我们会看的字段，各家给的不完全一样，所以都是可选的 */
+interface GatewayModel {
+  id: string;
+  active?: boolean;
+  context_window?: number;
+  output_modalities?: string[];
+  supported_features?: string[];
+}
+
 interface Gateway {
   baseUrl: string;
   apiKey: string;
@@ -22,10 +32,11 @@ interface Gateway {
 }
 
 function readGateway(): Gateway | null {
-  const baseUrl = process.env.WORKBUDDY_BASE_URL?.replace(/\/+$/, "");
-  const apiKey = process.env.WORKBUDDY_API_KEY;
+  const env = process.env;
+  const baseUrl = env.AI_GATEWAY_BASE_URL?.replace(/\/+$/, "");
+  const apiKey = env.AI_GATEWAY_API_KEY;
   if (!baseUrl || !apiKey) return null;
-  return { baseUrl, apiKey, model: process.env.WORKBUDDY_MODEL || DEFAULT_MODEL };
+  return { baseUrl, apiKey, model: env.AI_GATEWAY_MODEL || DEFAULT_MODEL };
 }
 
 function json(body: unknown, status: number, extra: Record<string, string> = {}): Response {
@@ -37,9 +48,9 @@ function json(body: unknown, status: number, extra: Record<string, string> = {})
 
 /** 把上游的报错整理成一句中文，同时不泄露密钥之类的细节 */
 function upstreamMessage(status: number): string {
-  if (status === 401) return "网关拒绝了密钥，检查服务器上的 WORKBUDDY_API_KEY";
+  if (status === 401) return "网关拒绝了密钥，检查服务器上的 AI_GATEWAY_API_KEY";
   if (status === 400) return "网关不接受这个请求，可能是模型名不对";
-  if (status === 429) return "网关忙不过来了（限流或额度用完），过一会儿再试";
+  if (status === 429) return "触发了限流或者今天的免费额度用完了，过一会儿再试";
   if (status >= 500) return "网关或模型暂时不可用，过一会儿再试";
   return `网关返回了 ${status}`;
 }
@@ -72,7 +83,23 @@ export default async function handler(request: Request): Promise<Response> {
   });
 }
 
-/** 把网关的模型清单转给页面，只留下模型名 */
+/**
+ * 能用来对话的模型。网关的清单里混着语音转写、语音合成和安全分类模型，
+ * 它们在这个页面上点了只会出乱码，所以不往下发。
+ */
+function isChatModel(item: GatewayModel): boolean {
+  if (item.active === false) return false;
+  if (/guard|whisper|orpheus|tts|embed/i.test(item.id)) return false;
+  // 输出得是文字，而且要支持正常的对话能力
+  const outputs = item.output_modalities;
+  if (Array.isArray(outputs) && !outputs.includes("text")) return false;
+  const features = item.supported_features;
+  if (Array.isArray(features) && !features.includes("tools")) return false;
+  // 行情快照本身就有几千字，上下文太小的放不下
+  return (item.context_window ?? 0) >= 16_000;
+}
+
+/** 把网关的模型清单转给页面，只留下能对话的那些 */
 async function listModels(gateway: Gateway): Promise<Response> {
   try {
     const upstream = await fetch(`${gateway.baseUrl}/models`, {
@@ -80,8 +107,11 @@ async function listModels(gateway: Gateway): Promise<Response> {
       signal: AbortSignal.timeout(15_000),
     });
     if (!upstream.ok) return json({ error: upstreamMessage(upstream.status) }, 502);
-    const data = (await upstream.json()) as { data?: { id?: unknown }[] };
-    const models = (data.data ?? []).map((item) => item.id).filter((id): id is string => typeof id === "string");
+    const data = (await upstream.json()) as { data?: GatewayModel[] };
+    const models = (data.data ?? [])
+      .filter((item) => typeof item?.id === "string" && isChatModel(item))
+      .map((item) => item.id)
+      .sort();
     return json({ models, default: gateway.model }, 200, {
       "cache-control": `public, s-maxage=${MODELS_CACHE_SECONDS}, stale-while-revalidate=600`,
     });
